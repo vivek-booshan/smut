@@ -53,6 +53,10 @@ handle_input :: proc(input: []u8, master_fd: posix.FD) {
 			case 'X':
 				if !screen.is_selecting {screen.selection_start_y = screen.cursor_y;screen.is_selecting = true}
 				screen.cursor_y = max(0, screen.cursor_y - count)
+			case 'y':
+				if screen.is_selecting {
+					yank_selection(&screen)
+				}
 			case 'i':
 				screen.mode = .Insert
 				screen.is_selecting = false
