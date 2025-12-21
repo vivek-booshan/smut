@@ -4,127 +4,41 @@ import "core:fmt"
 import "core:strconv"
 import "core:sys/posix"
 
-// handle_input :: proc(input: []u8, master_fd: posix.FD) {
-// 	for &b in input {
-// 		if b == 2 { 	// Ctrl-B
-// 			screen.mode = screen.mode == .Insert ? .Normal : .Insert
-// 			return
-// 		}
-
-// 		if screen.mode == .Normal {
-// 			if b == 'j' && screen.cursor_y < screen.height - 1 {screen.cursor_y += 1}
-// 			if b == 'k' && screen.cursor_y > 0 {screen.cursor_y -= 1}
-// 			if b == 'h' && screen.cursor_x < screen.width - 1 {screen.cursor_x -= 1}
-// 			if b == 'l' && screen.cursor_x > 0 {screen.cursor_x += 1}
-// 			if b == 'q' {screen.mode = .Insert}
-// 			return
-// 		}
-
-// 		posix.write(master_fd, &b, 1)
-// 	}
-// }
-// handle_input :: proc(input: []u8, master_fd: posix.FD) {
-// 	for &b in input {
-
-// 		if screen.mode == .Insert {
-// 			if b == 27 {
-// 				screen.mode = .Normal
-// 				screen.is_selecting = false // Reset selection on toggle
-// 				// screen.cmd_digit_idx = 0
-// 			}
-// 		} else if screen.mode == .Normal {
-// 			// 1. Capture Digits (0-9)
-// 			if b >= '0' && b <= '9' {
-// 				if screen.cmd_digit_idx < len(screen.cmd_digit_buf) {
-// 					screen.cmd_digit_buf[screen.cmd_digit_idx] = b
-// 					screen.cmd_digit_idx += 1
-// 				}
-// 				continue
-// 			}
-
-// 			// 2. Determine Multiplier
-// 			count := 1
-// 			if screen.cmd_digit_idx > 0 {
-// 				val, ok := strconv.parse_int(string(screen.cmd_digit_buf[:screen.cmd_digit_idx]))
-// 				if ok do count = val
-// 				screen.cmd_digit_idx = 0 // Reset for next command
-// 			}
-
-// 			// 3. Execute Commands with Multiplier
-// 			switch b {
-// 			case 'j':
-// 				// Move Down
-// 				screen.cursor_y = min(screen.height - 1, screen.cursor_y + count)
-// 			case 'k':
-// 				// Move Up
-// 				screen.cursor_y = max(0, screen.cursor_y - count)
-// 			case 'h':
-// 				// Move Left
-// 				screen.cursor_x = max(0, screen.cursor_x - count)
-// 			case 'l':
-// 				// Move Right
-// 				screen.cursor_x = min(screen.width - 1, screen.cursor_x + count)
-// 			case 'x':
-// 				// Highlight Down
-// 				if !screen.is_selecting {
-// 					screen.selection_start_y = screen.cursor_y
-// 					screen.is_selecting = true
-// 				}
-// 				screen.cursor_y = min(screen.height - 1, screen.cursor_y + count)
-// 			case 'X':
-// 				// Highlight Up
-// 				if !screen.is_selecting {
-// 					screen.selection_start_y = screen.cursor_y
-// 					screen.is_selecting = true
-// 				}
-// 				screen.cursor_y = max(0, screen.cursor_y - count)
-// 			case 'i':
-// 				// Quit visual mode or ESC
-// 				screen.mode = .Insert
-// 				screen.is_selecting = false
-// 			}
-// 			return
-// 		}
-
-// 		// Default: Write to PTY
-// 		posix.write(master_fd, &b, 1)
-// 	}
-// }
-
 handle_input :: proc(input: []u8, master_fd: posix.FD) {
 	for &b in input {
 		// Mode: NORMAL
 		if screen.mode == .Normal {
 			// 1. Enter Insert Mode
-			if b == 'i' {
-				screen.mode = .Insert
-				screen.is_selecting = false
-				screen.cmd_digit_idx = 0
-				continue
+
+			// 2. Buffer the keystroke for the status bar
+			if screen.cmd_idx < len(screen.cmd_buf) {
+				screen.cmd_buf[screen.cmd_idx] = b
+				screen.cmd_idx += 1
 			}
 
-			// 2. Buffer digits
-			if b >= '0' && b <= '9' {
-				if screen.cmd_digit_idx < len(screen.cmd_digit_buf) {
-					screen.cmd_digit_buf[screen.cmd_digit_idx] = b
-					screen.cmd_digit_idx += 1
-				}
-				continue
-			}
-
-			// 3. Command Multiplier
+			// 3. Extract the numeric multiplier (if any)
+			// We look at the buffer and find the digits at the start
 			count := 1
-			if screen.cmd_digit_idx > 0 {
-				if val, ok := strconv.parse_int(
-					string(screen.cmd_digit_buf[:screen.cmd_digit_idx]),
-				); ok {
+			digit_count := 0
+			for i in 0 ..< screen.cmd_idx {
+				if screen.cmd_buf[i] >= '0' && screen.cmd_buf[i] <= '9' {
+					digit_count += 1
+				} else {
+					break
+				}
+			}
+
+			if digit_count > 0 {
+				if val, ok := strconv.parse_int(string(screen.cmd_buf[:digit_count])); ok {
 					count = val
 				}
-				screen.cmd_digit_idx = 0
 			}
 
-			// 4. Command Execution
+			// 4. Command Execution (Triggered by the last byte 'b')
+			cmd_executed := true
 			switch b {
+			case '0' ..= '9':
+				cmd_executed = false // Don't clear buffer yet, we are still typing a number
 			case 'j':
 				screen.cursor_y = min(screen.height - 1, screen.cursor_y + count)
 			case 'k':
@@ -134,16 +48,28 @@ handle_input :: proc(input: []u8, master_fd: posix.FD) {
 			case 'l':
 				screen.cursor_x = min(screen.width - 1, screen.cursor_x + count)
 			case 'x':
-				// Highlight Down
 				if !screen.is_selecting {screen.selection_start_y = screen.cursor_y;screen.is_selecting = true}
 				screen.cursor_y = min(screen.height - 1, screen.cursor_y + count)
 			case 'X':
-				// Highlight Up
 				if !screen.is_selecting {screen.selection_start_y = screen.cursor_y;screen.is_selecting = true}
 				screen.cursor_y = max(0, screen.cursor_y - count)
-			case 27:
-				// ESC: clear selection
+			case 'i':
+				screen.mode = .Insert
 				screen.is_selecting = false
+				screen.cmd_idx = 0 // Clear keys on mode switch
+				continue
+			case 27:
+				// ESC
+				screen.is_selecting = false
+				screen.is_selecting = false
+			case:
+				// If it's an unrecognized key, we don't treat it as a command
+				cmd_executed = false
+			}
+
+			// If a command was finished (like 'j'), clear the keystroke buffer
+			if cmd_executed {
+				screen.cmd_idx = 0
 			}
 			continue
 		}
@@ -156,6 +82,7 @@ handle_input :: proc(input: []u8, master_fd: posix.FD) {
 		posix.write(master_fd, &b, 1)
 	}
 }
+
 resize_screen :: proc(s: ^Screen, pty_fd: posix.FD) {
 	ws: struct {
 		r, c, x, y: u16,
@@ -313,10 +240,30 @@ draw_screen :: proc() {
 		}
 		fmt.print("\x1b[K\r\n")
 	}
-
 	// 3. Status Bar
-	mode_str := screen.mode == .Normal ? "\x1b[30;44m  NORMAL  " : "\x1b[30;42m  INSERT  "
-	cmd_str := string(screen.cmd_digit_buf[:screen.cmd_digit_idx])
-	fmt.printf("%s %s \x1b[0m\x1b[K", mode_str, cmd_str)
+	// Select the color sequence based on the mode
+	mode_color := screen.mode == .Normal ? "\x1b[30;42m" : "\x1b[30;44m"
+	mode_name := screen.mode == .Normal ? " NORMAL " : " INSERT "
+	keystrokes := string(screen.cmd_buf[:screen.cmd_idx])
+
+	// Move to the last line of the screen (optional, if your loop doesn't end there)
+	// fmt.printf("\x1b[%d;1H", screen.height + 1)
+
+	// 1. Start the color
+	fmt.print(mode_color)
+
+	// 2. Print the mode name and any keystrokes
+	if len(keystrokes) > 0 {
+		fmt.printf("%s | %s ", mode_name, keystrokes)
+	} else {
+		fmt.printf("%s ", mode_name)
+	}
+
+	// 3. IMPORTANT: Erase to end of line WHILE the background color is active
+	// This fills the entire width with the background color
+	fmt.print("\x1b[K")
+
+	// 4. Finally, reset the attributes
+	fmt.print("\x1b[0m")
 }
 

@@ -15,11 +15,15 @@ Screen :: struct {
 		Insert,
 	},
 
-	// --- New Fields ---
-	selection_start_y: int, // Tracks where 'x' or 'X' started
-	is_selecting:      bool, // Whether we are currently highlighting a range
-	cmd_digit_buf:     [8]u8, // Stores digits for 10j, 5x, etc.
-	cmd_digit_idx:     int,
+	// Selection state
+	selection_start_y: int,
+	is_selecting:      bool,
+
+	// NEW: General Command Buffer for keystroke display
+	cmd_buf:           [16]u8,
+	cmd_idx:           int,
+
+	// ANSI State Machine
 	ansi_state:        enum {
 		Ground,
 		Escape,
