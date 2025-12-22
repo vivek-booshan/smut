@@ -6,6 +6,7 @@ GUTTER_W :: 4
 
 Screen :: struct {
 	grid:                 [dynamic]u8,
+	dirty:                [dynamic]bool,
 	width:                int,
 	height:               int,
 	cursor_x:             int,

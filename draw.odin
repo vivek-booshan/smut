@@ -1,8 +1,9 @@
 package smut
 
 import "core:fmt"
+import "core:strings"
+import "core:sys/darwin"
 import "core:sys/posix"
-
 
 resize_screen :: proc(s: ^Screen, pty_fd: posix.FD) {
 	ws: struct {
@@ -10,17 +11,21 @@ resize_screen :: proc(s: ^Screen, pty_fd: posix.FD) {
 	}
 
 	// Get Host Terminal Size using STDOUT 
-	if ioctl(posix.STDOUT_FILENO, 0x5413, &ws) != -1 {
+	if darwin.syscall_ioctl(posix.STDOUT_FILENO, darwin.TIOCGWINSZ, &ws) != -1 && ws.r > 0 {
 		s.width = int(ws.c)
 		s.height = int(ws.r)
 	} else {
-		s.width, s.height = 80, 30
+		s.width, s.height = 80, 24
 	}
 
 	total_cells := s.width * s.height
-	if len(s.grid) != total_cells {
+	if len(s.grid) != total_cells || len(s.dirty) != s.height {
 		delete(s.grid)
 		s.grid = make([dynamic]u8, total_cells)
+
+		delete(s.dirty)
+		s.dirty = make([dynamic]bool, s.height)
+		for i in 0 ..< s.height {s.dirty[i] = true}
 		s.cursor_x = clamp(s.cursor_x, 0, max(0, s.width - GUTTER_W - 1))
 		s.cursor_y = clamp(s.cursor_y, 0, max(0, s.height - 1))
 		// if s.cursor_x >= s.width - GUTTER_W {s.cursor_x = max(0, (s.width - GUTTER_W) - 1)}
@@ -39,6 +44,20 @@ process_output :: proc(s: ^Screen, data: []u8) {
 		switch s.ansi_state {
 		case .Ground:
 			switch b {
+			case 8, 127:
+				// backspace / delete
+				if s.cursor_x > 0 {
+					s.cursor_x -= 1
+
+					idx := (s.cursor_y * s.width) + s.cursor_x
+					if idx < len(s.grid) {
+						s.grid[idx] = 0
+					}
+
+					if s.cursor_y < len(s.dirty) {
+						s.dirty[s.cursor_y] = true
+					}
+				}
 			case 0x1b:
 				// ESC
 				s.ansi_state = .Escape
@@ -47,38 +66,25 @@ process_output :: proc(s: ^Screen, data: []u8) {
 				s.cursor_y += 1
 				handle_scrolling(s)
 				s.pty_cursor_y = s.cursor_y
+				if s.cursor_y < len(s.dirty) {s.dirty[s.cursor_y] = true}
 			case '\r':
 				s.cursor_x = 0
-			case '\t':
-				// Handle Tabs for alignment
-				s.cursor_x = (s.cursor_x + 8) & ~int(7)
-				if s.cursor_x >= term_view_w {s.cursor_x = term_view_w - 1}
-			case 8, 127:
-				// Backspace / Delete
-				if s.cursor_x > 0 {s.cursor_x -= 1}
 			case:
 				if b >= 32 {
-					// auto wrap logic
 					if s.cursor_x >= term_view_w {
 						s.cursor_x = 0
 						s.cursor_y += 1
-						// handle_scrolling(s)
+						handle_scrolling(s)
 					}
 
-					// write logic
 					idx := (s.cursor_y * s.width) + s.cursor_x
 					if idx < len(s.grid) {
 						s.grid[idx] = b
 						s.cursor_x += 1
+						// MARK DIRTY: This line has changed
+						if s.cursor_y < len(s.dirty) {s.dirty[s.cursor_y] = true}
 					}
-
 					s.pty_cursor_y = s.cursor_y
-					// if s.cursor_x < term_view_w {
-					// 	idx := (s.cursor_y * s.width) + s.cursor_x
-					// 	s.grid[idx] = b
-					// 	s.cursor_x += 1
-					// }
-					// s.pty_cursor_y = s.cursor_y
 				}
 			}
 
@@ -170,12 +176,16 @@ handle_scrolling :: proc(s: ^Screen) {
 
 		bottom_row_start := (s.height - 1) * s.width
 		for i in 0 ..< s.width {s.grid[bottom_row_start + i] = 0}
+		for i in 0 ..< s.height {s.dirty[i] = true}
 	}
 }
 
 
 draw_screen :: proc() {
-	fmt.print("\x1b[H\x1b[?25l")
+	b := strings.builder_make()
+	defer strings.builder_destroy(&b)
+
+	fmt.sbprint(&b, "\x1b[H\x1b[?25l")
 	term_view_w := max(1, screen.width - GUTTER_W)
 
 	history_len := len(screen.scrollback)
@@ -221,23 +231,23 @@ draw_screen :: proc() {
 		grid_y_live := abs_line - screen.total_lines_scrolled - 1
 		if is_history || (grid_y_live >= 0 && grid_y_live <= screen.pty_cursor_y) {
 			if y == screen.cursor_y {
-				fmt.printf("\x1b[33m%3d \x1b[0m", abs_line)
+				fmt.sbprintf(&b, "\x1b[33m%3d \x1b[0m", abs_line)
 			} else {
 				rel_num := abs(y - screen.cursor_y)
-				fmt.printf("\x1b[90m%3d \x1b[0m", rel_num)
+				fmt.sbprintf(&b, "\x1b[90m%3d \x1b[0m", rel_num)
 			}
 		} else {
-			fmt.printf("%*s", GUTTER_W, "")
+			fmt.sbprintf(&b, "%*s", GUTTER_W, "")
 		}
 		// grid_y := row_idx - history_len
 		// if is_history || grid_y <= screen.pty_cursor_y {
 		// 	rel_num := abs(y - screen.cursor_y)
 		// 	if y == screen.cursor_y {
 		// 	} else {
-		// 		fmt.printf("\x1b[90m%3d \x1b[0m", rel_num)
+		// 		fmt.sbprintf("\x1b[90m%3d \x1b[0m", rel_num)
 		// 	}
 		// } else {
-		// 	fmt.printf("%*s", GUTTER_W, "")
+		// 	fmt.sbprintf("%*s", GUTTER_W, "")
 		// }
 
 		// 2. Draw Grid with selection and cursor
@@ -247,18 +257,19 @@ draw_screen :: proc() {
 			is_cursor := (x == screen.cursor_x && y == screen.cursor_y)
 
 			if is_cursor {
-				fmt.print("\x1b[7m")
+				fmt.sbprint(&b, "\x1b[7m")
 			} else if is_in_selection {
-				fmt.print("\x1b[48;5;239m")
+				fmt.sbprint(&b, "\x1b[48;5;239m")
 			}
 
-			fmt.print(char == 0 ? ' ' : rune(char))
+			fmt.sbprint(&b, char == 0 ? ' ' : rune(char))
 
 			if is_cursor || is_in_selection {
-				fmt.print("\x1b[0m")
+				fmt.sbprint(&b, "\x1b[0m")
 			}
 		}
-		fmt.print("\x1b[K\r\n")
+		fmt.sbprint(&b, "\x1b[K\r\n")
+		screen.dirty[y] = false
 	}
 
 	// 3. Status Bar
@@ -266,12 +277,12 @@ draw_screen :: proc() {
 	mode_color := screen.mode == .Normal ? "\x1b[30;42m" : "\x1b[30;44m"
 	mode_name := screen.mode == .Normal ? " NORMAL " : " INSERT "
 
-	fmt.print(mode_color)
+	fmt.sbprint(&b, mode_color)
 	if screen.scroll_offset > 0 {
-		fmt.printf("%s [HISTORY: -%d] ", mode_name, screen.scroll_offset)
+		fmt.sbprintf(&b, "%s [HISTORY: -%d] ", mode_name, screen.scroll_offset)
 	} else {
-		fmt.print(mode_name)
+		fmt.sbprint(&b, mode_name)
 	}
-	fmt.print("\x1b[K\x1b[0m")
+	fmt.print(strings.to_string(b))
 }
 
