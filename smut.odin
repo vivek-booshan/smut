@@ -57,8 +57,6 @@ main :: proc() {
 			fmt.print("\x1b[2J") // Clear screen on resize 
 		}
 
-		draw_screen()
-
 		fds := []posix.pollfd {
 			{fd = posix.STDIN_FILENO, events = {.IN}},
 			{fd = master_fd, events = {.IN}},
@@ -81,6 +79,8 @@ main :: proc() {
 			if n <= 0 {running = false;break}
 			process_output(&screen, buf[:n])
 		}
+
+		draw_screen()
 	}
 }
 
