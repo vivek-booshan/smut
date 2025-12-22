@@ -10,6 +10,7 @@ Screen :: struct {
 	height:            int,
 	cursor_x:          int,
 	cursor_y:          int,
+	pty_cursor_y:      int,
 	mode:              enum {
 		Normal,
 		Insert,
@@ -32,7 +33,4 @@ Screen :: struct {
 	ansi_buf:          [32]u8,
 	ansi_idx:          int,
 }
-
-screen: Screen
-should_resize := true
 
