@@ -3,7 +3,8 @@ package smut
 import "core:fmt"
 import "core:sys/posix"
 
-// --- Manual Foreign Import for ioctl ---
+screen: Screen
+should_resize := true
 
 main :: proc() {
 	master_fd, slave_fd: posix.FD
