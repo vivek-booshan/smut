@@ -148,10 +148,23 @@ handle_csi_sequence :: proc(s: ^Screen, final: u8) {
 	}
 }
 
-
+MAX_SCROLLBACK :: 1000
 handle_scrolling :: proc(s: ^Screen) {
 	if s.cursor_y >= s.height {
 		s.cursor_y = s.height - 1
+
+		// 1. Capture the top row before shifting
+		line := make([]u8, s.width)
+		copy(line, s.grid[0:s.width])
+		append(&s.scrollback, line)
+
+		s.total_lines_scrolled += 1
+		// 2. Limit history (e.g., 1000 lines)
+		if len(s.scrollback) > MAX_SCROLLBACK {
+			delete(s.scrollback[0])
+			ordered_remove(&s.scrollback, 0)
+		}
+
 		start_read := s.width
 		copy(s.grid[0:], s.grid[start_read:])
 
@@ -165,8 +178,37 @@ draw_screen :: proc() {
 	fmt.print("\x1b[H\x1b[?25l")
 	term_view_w := max(1, screen.width - GUTTER_W)
 
+	history_len := len(screen.scrollback)
 	for y in 0 ..< screen.height {
-		// Selection range calculation
+		// Calculate the absolute row index including history
+		// Normal view (offset 0) ends at history_len + grid_y
+		row_idx := history_len - screen.scroll_offset + y
+		abs_line := (screen.total_lines_scrolled + y + 1) - screen.scroll_offset
+
+		row_data: []u8
+		is_history := false
+
+		// if row_idx < history_len {
+		// 	row_data = screen.scrollback[row_idx]
+		// 	is_history = true
+		// } else {
+		// 	grid_y := row_idx - history_len
+		// 	row_data = screen.grid[grid_y * screen.width:(grid_y + 1) * screen.width]
+		// }
+
+		if abs_line <= screen.total_lines_scrolled {
+			if abs_line > 0 && abs_line <= len(screen.scrollback) {
+				row_data = screen.scrollback[abs_line - 1]
+				is_history = true
+			}
+		} else {
+			grid_y := abs_line - screen.total_lines_scrolled - 1
+			if grid_y < screen.height {
+				row_data = screen.grid[grid_y * screen.width:]
+			}
+		}
+
+		// Selection range calculation (relative to screen y)
 		is_in_selection := false
 		if screen.is_selecting {
 			low := min(screen.selection_start_y, screen.cursor_y)
@@ -174,28 +216,40 @@ draw_screen :: proc() {
 			if y >= low && y <= high do is_in_selection = true
 		}
 
-		// 1. Draw Gutter (Relative numbers like Vim)
-		if y <= screen.pty_cursor_y {
-			rel_num := abs(y - screen.cursor_y)
+		// 1. Draw Gutter
+		// Always show gutter for history; show for grid only if below pty boundary
+		grid_y_live := abs_line - screen.total_lines_scrolled - 1
+		if is_history || (grid_y_live >= 0 && grid_y_live <= screen.pty_cursor_y) {
 			if y == screen.cursor_y {
-				fmt.printf("\x1b[33m%3d \x1b[0m", y + 1)
+				fmt.printf("\x1b[33m%3d \x1b[0m", abs_line)
 			} else {
+				rel_num := abs(y - screen.cursor_y)
 				fmt.printf("\x1b[90m%3d \x1b[0m", rel_num)
 			}
 		} else {
 			fmt.printf("%*s", GUTTER_W, "")
 		}
+		// grid_y := row_idx - history_len
+		// if is_history || grid_y <= screen.pty_cursor_y {
+		// 	rel_num := abs(y - screen.cursor_y)
+		// 	if y == screen.cursor_y {
+		// 	} else {
+		// 		fmt.printf("\x1b[90m%3d \x1b[0m", rel_num)
+		// 	}
+		// } else {
+		// 	fmt.printf("%*s", GUTTER_W, "")
+		// }
 
 		// 2. Draw Grid with selection and cursor
-		row_start := y * screen.width
 		for x in 0 ..< term_view_w {
-			char := screen.grid[row_start + x]
+			char := row_data[x]
+			// Only draw cursor if we are in the active grid view (not history)
 			is_cursor := (x == screen.cursor_x && y == screen.cursor_y)
 
 			if is_cursor {
-				fmt.print("\x1b[7m") // Inverse
+				fmt.print("\x1b[7m")
 			} else if is_in_selection {
-				fmt.print("\x1b[48;5;239m") // Selection BG
+				fmt.print("\x1b[48;5;239m")
 			}
 
 			fmt.print(char == 0 ? ' ' : rune(char))
@@ -206,30 +260,18 @@ draw_screen :: proc() {
 		}
 		fmt.print("\x1b[K\r\n")
 	}
+
 	// 3. Status Bar
-	// Select the color sequence based on the mode
+	// (Add scroll info if offset > 0)
 	mode_color := screen.mode == .Normal ? "\x1b[30;42m" : "\x1b[30;44m"
 	mode_name := screen.mode == .Normal ? " NORMAL " : " INSERT "
-	// keystrokes := string(screen.cmd_buf[:screen.cmd_idx])
 
-	// Move to the last line of the screen (optional, if your loop doesn't end there)
-	// fmt.printf("\x1b[%d;1H", screen.height + 1)
-
-	// 1. Start the color
 	fmt.print(mode_color)
-
-	// 2. Print the mode name and any keystrokes
-	// if len(keystrokes) > 0 {
-	// 	fmt.printf("%s | %s ", mode_name, keystrokes)
-	// } else {
-	// 	fmt.printf("%s ", mode_name)
-	// }
-
-	// 3. IMPORTANT: Erase to end of line WHILE the background color is active
-	// This fills the entire width with the background color
-	fmt.print("\x1b[K")
-
-	// 4. Finally, reset the attributes
-	fmt.print("\x1b[0m")
+	if screen.scroll_offset > 0 {
+		fmt.printf("%s [HISTORY: -%d] ", mode_name, screen.scroll_offset)
+	} else {
+		fmt.print(mode_name)
+	}
+	fmt.print("\x1b[K\x1b[0m")
 }
 
