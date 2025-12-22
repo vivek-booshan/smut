@@ -1,91 +1,8 @@
 package smut
 
 import "core:fmt"
-import "core:strconv"
 import "core:sys/posix"
 
-handle_input :: proc(input: []u8, master_fd: posix.FD) {
-	for &b in input {
-		// Mode: NORMAL
-		if screen.mode == .Normal {
-			// 1. Enter Insert Mode
-
-			// 2. Buffer the keystroke for the status bar
-			if screen.cmd_idx < len(screen.cmd_buf) {
-				screen.cmd_buf[screen.cmd_idx] = b
-				screen.cmd_idx += 1
-			}
-
-			// 3. Extract the numeric multiplier (if any)
-			// We look at the buffer and find the digits at the start
-			count := 1
-			digit_count := 0
-			for i in 0 ..< screen.cmd_idx {
-				if screen.cmd_buf[i] >= '0' && screen.cmd_buf[i] <= '9' {
-					digit_count += 1
-				} else {
-					break
-				}
-			}
-
-			if digit_count > 0 {
-				if val, ok := strconv.parse_int(string(screen.cmd_buf[:digit_count])); ok {
-					count = val
-				}
-			}
-
-			// 4. Command Execution (Triggered by the last byte 'b')
-			cmd_executed := true
-			switch b {
-			case '0' ..= '9':
-				cmd_executed = false // Don't clear buffer yet, we are still typing a number
-			case 'j':
-				screen.cursor_y = min(screen.height - 1, screen.cursor_y + count)
-			case 'k':
-				screen.cursor_y = max(0, screen.cursor_y - count)
-			case 'h':
-				screen.cursor_x = max(0, screen.cursor_x - count)
-			case 'l':
-				screen.cursor_x = min(screen.width - 1, screen.cursor_x + count)
-			case 'x':
-				if !screen.is_selecting {screen.selection_start_y = screen.cursor_y;screen.is_selecting = true}
-				screen.cursor_y = min(screen.height - 1, screen.cursor_y + count)
-			case 'X':
-				if !screen.is_selecting {screen.selection_start_y = screen.cursor_y;screen.is_selecting = true}
-				screen.cursor_y = max(0, screen.cursor_y - count)
-			case 'y':
-				if screen.is_selecting {
-					yank_selection(&screen)
-				}
-			case 'i':
-				screen.mode = .Insert
-				screen.is_selecting = false
-				screen.cmd_idx = 0 // Clear keys on mode switch
-				continue
-			case 27:
-				// ESC
-				screen.is_selecting = false
-				screen.is_selecting = false
-			case:
-				// If it's an unrecognized key, we don't treat it as a command
-				cmd_executed = false
-			}
-
-			// If a command was finished (like 'j'), clear the keystroke buffer
-			if cmd_executed {
-				screen.cmd_idx = 0
-			}
-			continue
-		}
-
-		// Mode: INSERT
-		if b == 27 { 	// ESC returns to Normal Mode
-			screen.mode = .Normal
-			continue
-		}
-		posix.write(master_fd, &b, 1)
-	}
-}
 
 resize_screen :: proc(s: ^Screen, pty_fd: posix.FD) {
 	ws: struct {
@@ -97,20 +14,22 @@ resize_screen :: proc(s: ^Screen, pty_fd: posix.FD) {
 		s.width = int(ws.c)
 		s.height = int(ws.r)
 	} else {
-		s.width, s.height = 80, 24
+		s.width, s.height = 80, 30
 	}
 
 	total_cells := s.width * s.height
 	if len(s.grid) != total_cells {
 		delete(s.grid)
 		s.grid = make([dynamic]u8, total_cells)
-		if s.cursor_x >= s.width - GUTTER_W {s.cursor_x = max(0, (s.width - GUTTER_W) - 1)}
-		if s.cursor_y >= s.height {s.cursor_y = max(0, s.height - 1)}
+		s.cursor_x = clamp(s.cursor_x, 0, max(0, s.width - GUTTER_W - 1))
+		s.cursor_y = clamp(s.cursor_y, 0, max(0, s.height - 1))
+		// if s.cursor_x >= s.width - GUTTER_W {s.cursor_x = max(0, (s.width - GUTTER_W) - 1)}
+		// if s.cursor_y >= s.height {s.cursor_y = max(0, s.height - 1)}
 	}
 
 	// Update child process of new size minus gutter [cite: 9]
 	term_w := max(1, s.width - GUTTER_W)
-	set_window_size(pty_fd, term_w, s.height)
+	set_window_size(pty_fd, term_w, s.height - 1)
 }
 
 process_output :: proc(s: ^Screen, data: []u8) {
@@ -127,6 +46,7 @@ process_output :: proc(s: ^Screen, data: []u8) {
 			case '\n':
 				s.cursor_y += 1
 				handle_scrolling(s)
+				s.pty_cursor_y = s.cursor_y
 			case '\r':
 				s.cursor_x = 0
 			case '\t':
@@ -138,11 +58,27 @@ process_output :: proc(s: ^Screen, data: []u8) {
 				if s.cursor_x > 0 {s.cursor_x -= 1}
 			case:
 				if b >= 32 {
-					if s.cursor_x < term_view_w {
-						idx := (s.cursor_y * s.width) + s.cursor_x
+					// auto wrap logic
+					if s.cursor_x >= term_view_w {
+						s.cursor_x = 0
+						s.cursor_y += 1
+						// handle_scrolling(s)
+					}
+
+					// write logic
+					idx := (s.cursor_y * s.width) + s.cursor_x
+					if idx < len(s.grid) {
 						s.grid[idx] = b
 						s.cursor_x += 1
 					}
+
+					s.pty_cursor_y = s.cursor_y
+					// if s.cursor_x < term_view_w {
+					// 	idx := (s.cursor_y * s.width) + s.cursor_x
+					// 	s.grid[idx] = b
+					// 	s.cursor_x += 1
+					// }
+					// s.pty_cursor_y = s.cursor_y
 				}
 			}
 
@@ -164,10 +100,30 @@ process_output :: proc(s: ^Screen, data: []u8) {
 		}
 	}
 }
+
+
 handle_csi_sequence :: proc(s: ^Screen, final: u8) {
 	params_str := string(s.ansi_buf[:s.ansi_idx])
 
 	switch final {
+	case 'J':
+		mode := 0
+		if s.ansi_idx > 0 {mode = int(s.ansi_buf[0] - '0')}
+
+		switch mode {
+		case 0:
+			// clear from cursor to end of screen
+			idx := (s.cursor_y * s.width) + s.cursor_x
+			for i in idx ..< len(s.grid) {s.grid[i] = 0}
+		case 1:
+			// clear from beginning of screen to cursor
+			idx := (s.cursor_y * s.width) + s.cursor_x
+			for i in 0 ..< idx {s.grid[i] = 0}
+		case 2, 3:
+			for i in 0 ..< len(s.grid) {s.grid[i] = 0}
+			s.cursor_x = 0
+			s.cursor_y = 0
+		}
 	case 'K':
 		// Erase in Line
 		// 0 = cursor to end (default), 1 = start to cursor, 2 = whole line
@@ -192,6 +148,7 @@ handle_csi_sequence :: proc(s: ^Screen, final: u8) {
 	}
 }
 
+
 handle_scrolling :: proc(s: ^Screen) {
 	if s.cursor_y >= s.height {
 		s.cursor_y = s.height - 1
@@ -202,6 +159,7 @@ handle_scrolling :: proc(s: ^Screen) {
 		for i in 0 ..< s.width {s.grid[bottom_row_start + i] = 0}
 	}
 }
+
 
 draw_screen :: proc() {
 	fmt.print("\x1b[H\x1b[?25l")
@@ -217,11 +175,15 @@ draw_screen :: proc() {
 		}
 
 		// 1. Draw Gutter (Relative numbers like Vim)
-		rel_num := abs(y - screen.cursor_y)
-		if y == screen.cursor_y {
-			fmt.printf("\x1b[33m%3d \x1b[0m", y + 1)
+		if y <= screen.pty_cursor_y {
+			rel_num := abs(y - screen.cursor_y)
+			if y == screen.cursor_y {
+				fmt.printf("\x1b[33m%3d \x1b[0m", y + 1)
+			} else {
+				fmt.printf("\x1b[90m%3d \x1b[0m", rel_num)
+			}
 		} else {
-			fmt.printf("\x1b[90m%3d \x1b[0m", rel_num)
+			fmt.printf("%*s", GUTTER_W, "")
 		}
 
 		// 2. Draw Grid with selection and cursor
@@ -248,7 +210,7 @@ draw_screen :: proc() {
 	// Select the color sequence based on the mode
 	mode_color := screen.mode == .Normal ? "\x1b[30;42m" : "\x1b[30;44m"
 	mode_name := screen.mode == .Normal ? " NORMAL " : " INSERT "
-	keystrokes := string(screen.cmd_buf[:screen.cmd_idx])
+	// keystrokes := string(screen.cmd_buf[:screen.cmd_idx])
 
 	// Move to the last line of the screen (optional, if your loop doesn't end there)
 	// fmt.printf("\x1b[%d;1H", screen.height + 1)
@@ -257,11 +219,11 @@ draw_screen :: proc() {
 	fmt.print(mode_color)
 
 	// 2. Print the mode name and any keystrokes
-	if len(keystrokes) > 0 {
-		fmt.printf("%s | %s ", mode_name, keystrokes)
-	} else {
-		fmt.printf("%s ", mode_name)
-	}
+	// if len(keystrokes) > 0 {
+	// 	fmt.printf("%s | %s ", mode_name, keystrokes)
+	// } else {
+	// 	fmt.printf("%s ", mode_name)
+	// }
 
 	// 3. IMPORTANT: Erase to end of line WHILE the background color is active
 	// This fills the entire width with the background color
