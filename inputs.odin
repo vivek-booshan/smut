@@ -42,7 +42,6 @@ handle_normal_command :: proc(b: u8, count: int) -> bool {
 			// scroll down towards live view
 			screen.scroll_offset = max(0, screen.scroll_offset - count)
 		}
-		screen.cursor_y = min(screen.pty_cursor_y, screen.cursor_y + count)
 	case 'k':
 		if screen.cursor_y > 0 {
 			screen.cursor_y -= count
@@ -55,11 +54,22 @@ handle_normal_command :: proc(b: u8, count: int) -> bool {
 	case 'l':
 		screen.cursor_x = min(screen.width - 1, screen.cursor_x + count)
 	case 'x':
-		if !screen.is_selecting {screen.selection_start_y = screen.cursor_y;screen.is_selecting = true}
-		screen.cursor_y = min(screen.pty_cursor_y, screen.cursor_y + count)
+		if !screen.is_selecting {
+			screen.selection_start_y = screen.cursor_y
+		}
+		if count > 1 || screen.is_selecting {
+			screen.cursor_y = min(screen.pty_cursor_y, screen.cursor_y + count)
+		}
+		screen.is_selecting = true
+
 	case 'X':
-		if !screen.is_selecting {screen.selection_start_y = screen.cursor_y;screen.is_selecting = true}
-		screen.cursor_y = max(0, screen.cursor_y - count)
+		if !screen.is_selecting {
+			screen.selection_start_y = screen.cursor_y
+		}
+		if count > 1 || screen.is_selecting {
+			screen.cursor_y = max(0, screen.cursor_y - count)
+		}
+		screen.is_selecting = true
 	case 'y':
 		if screen.is_selecting {
 			yank_selection(&screen)
