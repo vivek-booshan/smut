@@ -36,9 +36,20 @@ handle_normal_command :: proc(b: u8, count: int) -> bool {
 	case '0' ..= '9':
 		cmd_executed = false // Don't clear buffer yet, we are still typing a number
 	case 'j':
+		if screen.cursor_y < screen.pty_cursor_y {
+			screen.cursor_y = min(screen.pty_cursor_y, screen.cursor_y + count)
+		} else {
+			// scroll down towards live view
+			screen.scroll_offset = max(0, screen.scroll_offset - count)
+		}
 		screen.cursor_y = min(screen.pty_cursor_y, screen.cursor_y + count)
 	case 'k':
-		screen.cursor_y = max(0, screen.cursor_y - count)
+		if screen.cursor_y > 0 {
+			screen.cursor_y -= count
+		} else {
+			// scroll up into dead view
+			screen.scroll_offset = min(len(screen.scrollback), screen.scroll_offset + count)
+		}
 	case 'h':
 		screen.cursor_x = max(0, screen.cursor_x - count)
 	case 'l':
@@ -53,8 +64,12 @@ handle_normal_command :: proc(b: u8, count: int) -> bool {
 		if screen.is_selecting {
 			yank_selection(&screen)
 		}
+	case 'G':
+		screen.scroll_offset = 0
+		screen.cursor_y = screen.pty_cursor_y
 	case 'i':
 		screen.mode = .Insert
+		screen.scroll_offset = 0
 		screen.cursor_y = screen.pty_cursor_y
 		screen.is_selecting = false
 		screen.cmd_idx = 0 // Clear keys on mode switch
