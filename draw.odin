@@ -180,6 +180,44 @@ handle_scrolling :: proc(s: ^Screen) {
 	}
 }
 
+get_row_data :: proc(abs_line: int) -> (row_data: []u8, is_history: bool) {
+
+	is_history = false
+	if abs_line <= screen.total_lines_scrolled {
+		if abs_line > 0 && abs_line <= len(screen.scrollback) {
+			row_data = screen.scrollback[abs_line - 1]
+			is_history = true
+		}
+	} else {
+		grid_y := abs_line - screen.total_lines_scrolled - 1
+		if grid_y >= 0 && grid_y < screen.height {
+			row_data = screen.grid[grid_y * screen.width:]
+		}
+	}
+	return row_data, is_history
+
+}
+within_selection :: proc(y: int) -> bool {
+	if !screen.is_selecting do return false
+	low := min(screen.selection_start_y, screen.cursor_y)
+	high := max(screen.selection_start_y, screen.cursor_y)
+	return y >= low && y <= high
+}
+
+draw_gutter :: proc(b: ^strings.Builder, y, abs_line, pty_cursor_y: int, is_history: bool) {
+	grid_y_live := abs_line - screen.total_lines_scrolled - 1
+
+	if is_history || (grid_y_live >= 0 && grid_y_live <= pty_cursor_y) {
+		if y == screen.cursor_y {
+			fmt.sbprintf(b, "\x1b[33m%3d \x1b[0m", abs_line)
+		} else {
+			rel_num := abs(y - screen.cursor_y)
+			fmt.sbprintf(b, "\x1b[90m%3d \x1b[0m", rel_num)
+		}
+	} else {
+		fmt.sbprintf(b, "%*s", GUTTER_W, "")
+	}
+}
 
 draw_screen :: proc() {
 	b := strings.builder_make()
@@ -195,94 +233,62 @@ draw_screen :: proc() {
 		row_idx := history_len - screen.scroll_offset + y
 		abs_line := (screen.total_lines_scrolled + y + 1) - screen.scroll_offset
 
-		row_data: []u8
-		is_history := false
-
-		// if row_idx < history_len {
-		// 	row_data = screen.scrollback[row_idx]
-		// 	is_history = true
-		// } else {
-		// 	grid_y := row_idx - history_len
-		// 	row_data = screen.grid[grid_y * screen.width:(grid_y + 1) * screen.width]
-		// }
-
-		if abs_line <= screen.total_lines_scrolled {
-			if abs_line > 0 && abs_line <= len(screen.scrollback) {
-				row_data = screen.scrollback[abs_line - 1]
-				is_history = true
-			}
-		} else {
-			grid_y := abs_line - screen.total_lines_scrolled - 1
-			if grid_y < screen.height {
-				row_data = screen.grid[grid_y * screen.width:]
-			}
-		}
+		row_data, is_history := get_row_data(abs_line)
 
 		// Selection range calculation (relative to screen y)
-		is_in_selection := false
-		if screen.is_selecting {
-			low := min(screen.selection_start_y, screen.cursor_y)
-			high := max(screen.selection_start_y, screen.cursor_y)
-			if y >= low && y <= high do is_in_selection = true
-		}
+		is_in_selection := within_selection(y)
 
 		// 1. Draw Gutter
-		// Always show gutter for history; show for grid only if below pty boundary
-		grid_y_live := abs_line - screen.total_lines_scrolled - 1
-		if is_history || (grid_y_live >= 0 && grid_y_live <= screen.pty_cursor_y) {
-			if y == screen.cursor_y {
-				fmt.sbprintf(&b, "\x1b[33m%3d \x1b[0m", abs_line)
-			} else {
-				rel_num := abs(y - screen.cursor_y)
-				fmt.sbprintf(&b, "\x1b[90m%3d \x1b[0m", rel_num)
-			}
-		} else {
-			fmt.sbprintf(&b, "%*s", GUTTER_W, "")
-		}
-		// grid_y := row_idx - history_len
-		// if is_history || grid_y <= screen.pty_cursor_y {
-		// 	rel_num := abs(y - screen.cursor_y)
-		// 	if y == screen.cursor_y {
-		// 	} else {
-		// 		fmt.sbprintf("\x1b[90m%3d \x1b[0m", rel_num)
-		// 	}
-		// } else {
-		// 	fmt.sbprintf("%*s", GUTTER_W, "")
-		// }
+		draw_gutter(&b, y, abs_line, screen.pty_cursor_y, is_history)
 
 		// 2. Draw Grid with selection and cursor
-		for x in 0 ..< term_view_w {
-			char := row_data[x]
-			// Only draw cursor if we are in the active grid view (not history)
-			is_cursor := (x == screen.cursor_x && y == screen.cursor_y)
-
-			if is_cursor {
-				fmt.sbprint(&b, "\x1b[7m")
-			} else if is_in_selection {
-				fmt.sbprint(&b, "\x1b[48;5;239m")
-			}
-
-			fmt.sbprint(&b, char == 0 ? ' ' : rune(char))
-
-			if is_cursor || is_in_selection {
-				fmt.sbprint(&b, "\x1b[0m")
-			}
-		}
+		draw_grid(&b, y, row_data, term_view_w, is_in_selection)
 		fmt.sbprint(&b, "\x1b[K\r\n")
 		screen.dirty[y] = false
 	}
 
+	draw_status_bar(&b)
+	fmt.print(strings.to_string(b))
+}
+
+draw_status_bar :: proc(b: ^strings.Builder) {
 	// 3. Status Bar
 	// (Add scroll info if offset > 0)
 	mode_color := screen.mode == .Normal ? "\x1b[30;42m" : "\x1b[30;44m"
 	mode_name := screen.mode == .Normal ? " NORMAL " : " INSERT "
 
-	fmt.sbprint(&b, mode_color)
+	fmt.sbprint(b, mode_color)
 	if screen.scroll_offset > 0 {
-		fmt.sbprintf(&b, "%s [HISTORY: -%d] ", mode_name, screen.scroll_offset)
+		fmt.sbprintf(b, "%s [HISTORY: -%d] ", mode_name, screen.scroll_offset)
 	} else {
-		fmt.sbprint(&b, mode_name)
+		fmt.sbprint(b, mode_name)
 	}
-	fmt.print(strings.to_string(b))
+
+}
+draw_grid :: proc(
+	b: ^strings.Builder,
+	y: int,
+	row_data: []u8,
+	view_w: int,
+	is_in_selection: bool,
+) {
+	for x in 0 ..< view_w {
+		char := row_data[x]
+		// Only draw cursor if we are in the active grid view (not history)
+		is_cursor := (x == screen.cursor_x && y == screen.cursor_y)
+
+		if is_cursor {
+			fmt.sbprint(b, "\x1b[7m")
+		} else if is_in_selection {
+			fmt.sbprint(b, "\x1b[48;5;239m")
+		}
+
+		fmt.sbprint(b, char == 0 ? ' ' : rune(char))
+
+		if is_cursor || is_in_selection {
+			fmt.sbprint(b, "\x1b[0m")
+		}
+	}
+
 }
 
