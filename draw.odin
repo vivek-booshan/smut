@@ -156,8 +156,8 @@ handle_csi_sequence :: proc(s: ^Screen, final: u8) {
 
 MAX_SCROLLBACK :: 1000
 handle_scrolling :: proc(s: ^Screen) {
-	if s.cursor_y >= s.height {
-		s.cursor_y = s.height - 1
+	if s.cursor_y >= s.height - 1 {
+		s.cursor_y = s.height - 2
 
 		// 1. Capture the top row before shifting
 		line := make([]u8, s.width)
@@ -227,7 +227,7 @@ draw_screen :: proc() {
 	term_view_w := max(1, screen.width - GUTTER_W)
 
 	history_len := len(screen.scrollback)
-	for y in 0 ..< screen.height {
+	for y in 0 ..< screen.height - 1 {
 		// Calculate the absolute row index including history
 		// Normal view (offset 0) ends at history_len + grid_y
 		row_idx := history_len - screen.scroll_offset + y
