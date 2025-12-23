@@ -1,6 +1,7 @@
 package smut
 
 import "core:fmt"
+import "core:strconv"
 import "core:strings"
 import "core:sys/darwin"
 import "core:sys/posix"
@@ -28,6 +29,12 @@ resize_screen :: proc(s: ^Screen, pty_fd: posix.FD) {
 		for i in 0 ..< s.height {s.dirty[i] = true}
 		s.cursor_x = clamp(s.cursor_x, 0, max(0, s.width - GUTTER_W - 1))
 		s.cursor_y = clamp(s.cursor_y, 0, max(0, s.height - 1))
+
+		if len(s.alt_grid) > 0 do delete(s.alt_grid)
+		s.alt_grid = make([dynamic]u8, total_cells)
+		for i in 0 ..< total_cells {
+			s.alt_grid[i] = 0
+		}
 		// if s.cursor_x >= s.width - GUTTER_W {s.cursor_x = max(0, (s.width - GUTTER_W) - 1)}
 		// if s.cursor_y >= s.height {s.cursor_y = max(0, s.height - 1)}
 	}
@@ -39,7 +46,7 @@ resize_screen :: proc(s: ^Screen, pty_fd: posix.FD) {
 
 process_output :: proc(s: ^Screen, data: []u8) {
 	term_view_w := max(1, s.width - GUTTER_W)
-
+	current_w := s.in_alt_screen ? s.width : (s.width - GUTTER_W)
 	for b in data {
 		switch s.ansi_state {
 		case .Ground:
@@ -62,30 +69,54 @@ process_output :: proc(s: ^Screen, data: []u8) {
 				// ESC
 				s.ansi_state = .Escape
 				s.ansi_idx = 0
+			case '\t':
+				s.cursor_x = (s.cursor_x + 8) & ~int(7)
+				if s.cursor_x >= current_w do s.cursor_x = current_w - 1
+				if s.cursor_y < len(s.dirty) do s.dirty[s.cursor_y] = true
+
 			case '\n':
 				s.cursor_y += 1
 				handle_scrolling(s)
 				s.pty_cursor_y = s.cursor_y
 				if s.cursor_y < len(s.dirty) {s.dirty[s.cursor_y] = true}
+
 			case '\r':
 				s.cursor_x = 0
+
 			case:
 				if b >= 32 {
-					if s.cursor_x >= term_view_w {
-						s.cursor_x = 0
-						s.cursor_y += 1
-						handle_scrolling(s)
+					idx := (s.cursor_y * s.width) + s.cursor_x
+
+					if s.in_alt_screen {
+						if idx < len(s.alt_grid) do s.alt_grid[idx] = b
+					} else {
+						if idx < len(s.grid) do s.grid[idx] = b
 					}
 
-					idx := (s.cursor_y * s.width) + s.cursor_x
-					if idx < len(s.grid) {
-						s.grid[idx] = b
-						s.cursor_x += 1
-						// MARK DIRTY: This line has changed
-						if s.cursor_y < len(s.dirty) {s.dirty[s.cursor_y] = true}
+					s.cursor_x += 1
+					if s.cursor_x >= term_view_w {
+						s.cursor_x = 0
+						s.cursor_y = min(s.cursor_y + 1, s.height - 1)
 					}
+					if s.cursor_y < len(s.dirty) do s.dirty[s.cursor_y] = true
 					s.pty_cursor_y = s.cursor_y
 				}
+			// if b >= 32 {
+			// 	if s.cursor_x >= term_view_w {
+			// 		s.cursor_x = 0
+			// 		s.cursor_y += 1
+			// 		handle_scrolling(s)
+			// 	}
+
+			// 	idx := (s.cursor_y * s.width) + s.cursor_x
+			// 	if idx < len(s.grid) {
+			// 		s.grid[idx] = b
+			// 		s.cursor_x += 1
+			// 		// MARK DIRTY: This line has changed
+			// 		if s.cursor_y < len(s.dirty) {s.dirty[s.cursor_y] = true}
+			// 	}
+			// 	s.pty_cursor_y = s.cursor_y
+			// }
 			}
 
 		case .Escape:
@@ -111,22 +142,26 @@ process_output :: proc(s: ^Screen, data: []u8) {
 handle_csi_sequence :: proc(s: ^Screen, final: u8) {
 	params_str := string(s.ansi_buf[:s.ansi_idx])
 
+	args := strings.split(params_str, ";")
+	defer delete(args)
+
 	switch final {
 	case 'J':
 		mode := 0
-		if s.ansi_idx > 0 {mode = int(s.ansi_buf[0] - '0')}
-
+		if len(args) > 0 && len(args[0]) > 0 do mode = strconv.atoi(args[0])
+		// if s.ansi_idx > 0 {mode = int(s.ansi_buf[0] - '0')}
+		target_grid := s.in_alt_screen ? &s.alt_grid : &s.grid
 		switch mode {
 		case 0:
 			// clear from cursor to end of screen
 			idx := (s.cursor_y * s.width) + s.cursor_x
-			for i in idx ..< len(s.grid) {s.grid[i] = 0}
+			for i in idx ..< len(target_grid) {target_grid[i] = 0}
 		case 1:
 			// clear from beginning of screen to cursor
 			idx := (s.cursor_y * s.width) + s.cursor_x
-			for i in 0 ..< idx {s.grid[i] = 0}
+			for i in 0 ..< idx {target_grid[i] = 0}
 		case 2, 3:
-			for i in 0 ..< len(s.grid) {s.grid[i] = 0}
+			for i in 0 ..< len(target_grid) {target_grid[i] = 0}
 			s.cursor_x = 0
 			s.cursor_y = 0
 		}
@@ -139,13 +174,54 @@ handle_csi_sequence :: proc(s: ^Screen, final: u8) {
 			s.grid[row_start + x] = 0
 		}
 	case 'H', 'f':
-		// Cursor Position
-		// Example: \x1b[row;colH
-		// If empty, defaults to 1;1
-		// Note: ANSI is 1-based, our grid is 0-based
-		// Simple implementation for demonstration:
-		s.cursor_x = 0
-		s.cursor_y = 0
+		row := 0
+		col := 0
+
+		if len(args) >= 1 && len(args[0]) > 0 {
+			row = max(0, strconv.atoi(args[0]) - 1)
+		}
+		if len(args) >= 2 && len(args[1]) > 0 {
+			col = max(0, strconv.atoi(args[1]) - 1)
+		}
+
+		s.cursor_y = clamp(row, 0, s.height - 1)
+		max_w := s.in_alt_screen ? s.width : (s.width - GUTTER_W)
+
+		s.cursor_x = clamp(col, 0, max_w - 1)
+	case 'h':
+		// Set Mode
+		if params_str == "?1049" {
+			if !s.in_alt_screen {
+				// save main cursor
+				s.alt_cursor_x = s.cursor_x
+				s.alt_cursor_y = s.cursor_y
+
+				s.in_alt_screen = true
+
+				// clear alt grid and reset cursor
+				for i in 0 ..< len(s.alt_grid) {
+					s.alt_grid[i] = 0
+				}
+				s.cursor_x = 0
+				s.cursor_y = 0
+
+				for i in 0 ..< s.height do s.dirty[i] = true
+			}
+		}
+	case 'l':
+		if params_str == "?1049" {
+			if s.in_alt_screen {
+				// exit alt mode
+				s.in_alt_screen = false
+
+				// restore main cursor
+				s.cursor_x = s.alt_cursor_x
+				s.cursor_y = s.alt_cursor_y
+
+
+				for i in 0 ..< s.height do s.dirty[i] = true
+			}
+		}
 	case 'm':
 		// Character Attributes (Color)
 		// We ignore colors for now to keep the grid as u8,
@@ -233,16 +309,29 @@ draw_screen :: proc() {
 		row_idx := history_len - screen.scroll_offset + y
 		abs_line := (screen.total_lines_scrolled + y + 1) - screen.scroll_offset
 
-		row_data, is_history := get_row_data(abs_line)
+		row_data: []u8
+		is_history := false
+		if screen.in_alt_screen {
+			start := y * screen.width
+			if start < len(screen.alt_grid) {
+				row_data = screen.alt_grid[start:start + screen.width]
+			}
+		} else {
+			row_data, is_history = get_row_data(abs_line)
+		}
 
 		// Selection range calculation (relative to screen y)
 		is_in_selection := within_selection(y)
 
 		// 1. Draw Gutter
-		draw_gutter(&b, y, abs_line, screen.pty_cursor_y, is_history)
+		if !screen.in_alt_screen {
+			draw_gutter(&b, y, abs_line, screen.pty_cursor_y, is_history)
+		}
 
 		// 2. Draw Grid with selection and cursor
-		draw_grid(&b, y, row_data, term_view_w, is_in_selection)
+		view_w := screen.in_alt_screen ? screen.width : term_view_w
+		draw_grid(&b, y, row_data, view_w, is_in_selection)
+
 		fmt.sbprint(&b, "\x1b[K\r\n")
 		screen.dirty[y] = false
 	}

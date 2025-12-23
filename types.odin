@@ -48,5 +48,11 @@ Screen :: struct {
 	},
 	ansi_buf:             [32]u8,
 	ansi_idx:             int,
+
+	// ALTERNATE SCREEN BUFFER
+	in_alt_screen:        bool,
+	alt_grid:             [dynamic]u8,
+	alt_cursor_x:         int,
+	alt_cursor_y:         int,
 }
 
