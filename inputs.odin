@@ -19,6 +19,7 @@ GotoAction :: enum u8 {
 	LINE_START = 's',
 	LINE_END   = 'l',
 }
+
 status_bar_keystroke_buffer :: proc(b: u8) {
 	if screen.cmd_idx < len(screen.cmd_buf) {
 		screen.cmd_buf[screen.cmd_idx] = b
@@ -48,6 +49,7 @@ command_multiplier :: proc() -> int {
 
 handle_normal_command :: proc(b: u8, count: int) -> bool {
 	cmd_executed := true
+
 	switch b {
 	case '0' ..= '9':
 		cmd_executed = false // Don't clear buffer yet, we are still typing a number

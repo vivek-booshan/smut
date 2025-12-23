@@ -22,8 +22,9 @@ Screen :: struct {
 	cursor_y:             int,
 	pty_cursor_y:         int,
 	mode:                 enum {
-		Normal,
 		Insert,
+		Normal,
+		Command,
 	},
 
 	// Selection state
