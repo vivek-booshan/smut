@@ -3,6 +3,22 @@ package smut
 import "core:strconv"
 import "core:sys/posix"
 
+
+Action :: enum u8 {
+	MOVE_DOWN         = 'j',
+	MOVE_UP           = 'k',
+	MOVE_LEFT         = 'h',
+	MOVE_RIGHT        = 'l',
+	EXTEND_LINE_BELOW = 'x',
+	EXTEND_LINE       = 'x',
+	EXTEND_LINE_ABOVE = 'X',
+	GOTO              = 'g',
+}
+
+GotoAction :: enum u8 {
+	LINE_START = 's',
+	LINE_END   = 'l',
+}
 status_bar_keystroke_buffer :: proc(b: u8) {
 	if screen.cmd_idx < len(screen.cmd_buf) {
 		screen.cmd_buf[screen.cmd_idx] = b

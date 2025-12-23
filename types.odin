@@ -4,6 +4,15 @@ import "core:sys/posix"
 
 GUTTER_W :: 4
 
+Key :: enum u8 {
+	NONE      = 0,
+	CTRLB     = 2,
+	BACKSPACE = 8,
+	TAB       = 9,
+	ENTER     = 13,
+	ESCAPE    = 27,
+	DELETE    = 127,
+}
 Screen :: struct {
 	grid:                 [dynamic]u8,
 	dirty:                [dynamic]bool,
