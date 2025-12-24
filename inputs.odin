@@ -2,6 +2,7 @@ package smut
 
 import "core:strconv"
 import "core:sys/posix"
+import "core:unicode/utf8"
 
 INSERT :: 'i'
 MOTION :: 'n'
@@ -22,7 +23,7 @@ GotoAction :: enum u8 {
 	LINE_END   = 'l',
 }
 
-status_bar_keystroke_buffer :: proc(b: u8) {
+status_bar_keystroke_buffer :: proc(b: rune) {
 	if screen.cmd_idx < len(screen.cmd_buf) {
 		screen.cmd_buf[screen.cmd_idx] = b
 		screen.cmd_idx += 1
@@ -41,7 +42,7 @@ command_multiplier :: proc() -> int {
 	}
 
 	if digit_count > 0 {
-		if val, ok := strconv.parse_int(string(screen.cmd_buf[:digit_count])); ok {
+		if val, ok := strconv.parse_int(utf8.runes_to_string(screen.cmd_buf[:digit_count])); ok {
 			count = val
 		}
 	}
@@ -157,12 +158,12 @@ handle_input :: proc(input: []u8, master_fd: posix.FD) {
 
 		if screen.mode == .Switch {
 			// 2. Buffer the keystroke for the status bar
-			status_bar_keystroke_buffer(b)
+			status_bar_keystroke_buffer(rune(b))
 			handle_switch_inputs(b)
 			continue
 		}
 		if screen.mode == .Motion || screen.mode == .Select {
-			status_bar_keystroke_buffer(b)
+			status_bar_keystroke_buffer(rune(b))
 			count := command_multiplier()
 			if handle_motion_inputs(b, count) {
 				continue

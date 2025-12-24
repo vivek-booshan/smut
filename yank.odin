@@ -3,6 +3,7 @@ package smut
 import "core:fmt"
 import "core:os"
 import "core:strings"
+import "core:unicode/utf8"
 
 foreign import libc "system:c"
 foreign libc {system :: proc(command: cstring) -> i32 ---}
@@ -28,7 +29,8 @@ yank_selection_to_clipboard :: proc(s: ^Screen) {
 			}
 		}
 
-		row_str := string(s.grid[row_start:row_start + last_char_idx])
+
+		row_str := utf8.runes_to_string(s.grid[row_start:row_start + last_char_idx])
 		strings.write_string(&builder, row_str)
 		if y < high {
 			strings.write_byte(&builder, '\n')

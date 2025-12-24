@@ -107,13 +107,13 @@ handle_erase_in_line :: proc(s: ^Screen, mode: int) {
 	switch mode {
 	case 0:
 		// Clear from cursor to end of line
-		for x in s.cursor_x ..< s.width {s.grid[row_start + x] = 0}
+		for x in s.cursor_x ..< s.width {s.grid[row_start + x] = rune(0)}
 	case 1:
 		// Clear from start of line to cursor
-		for x in 0 ..< s.cursor_x + 1 {s.grid[row_start + x] = 0}
+		for x in 0 ..< s.cursor_x + 1 {s.grid[row_start + x] = rune(0)}
 	case 2:
 		// Clear whole line
-		for x in 0 ..< s.width {s.grid[row_start + x] = 0}
+		for x in 0 ..< s.width {s.grid[row_start + x] = rune(0)}
 	}
 	s.dirty[s.cursor_y] = true
 }
@@ -126,13 +126,13 @@ handle_erase_in_display :: proc(s: ^Screen, mode: int) {
 		handle_erase_in_line(s, 0)
 		// Clear all lines below
 		for y in s.cursor_y + 1 ..< s.height {
-			for x in 0 ..< s.width {s.grid[y * s.width + x] = 0}
+			for x in 0 ..< s.width {s.grid[y * s.width + x] = rune(0)}
 			s.dirty[y] = true
 		}
 	case 2:
 		// Clear whole screen
 		grid := s.in_alt_screen ? s.alt_grid : s.grid
-		for i in 0 ..< len(grid) {grid[i] = 0}
+		for i in 0 ..< len(grid) {grid[i] = rune(0)}
 		for i in 0 ..< s.height {s.dirty[i] = true}
 	}
 }

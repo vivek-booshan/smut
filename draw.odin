@@ -1,10 +1,11 @@
 package smut
 
 import "core:fmt"
-import "core:strconv"
+// import "core:strconv"
 import "core:strings"
 import "core:sys/darwin"
 import "core:sys/posix"
+import "core:unicode/utf8"
 
 resize_screen :: proc(s: ^Screen, pty_fd: posix.FD) {
 	ws: struct {
@@ -25,8 +26,8 @@ resize_screen :: proc(s: ^Screen, pty_fd: posix.FD) {
 		total_cells := s.width * s.height
 
 		// Prepare new buffers
-		new_grid := make([dynamic]u8, total_cells)
-		new_alt_grid := make([dynamic]u8, total_cells)
+		new_grid := make([dynamic]rune, total_cells)
+		new_alt_grid := make([dynamic]rune, total_cells)
 		new_dirty := make([dynamic]bool, s.height)
 
 		// 4. PRESERVATION LOGIC: Copy old data into the new grid
@@ -73,182 +74,86 @@ resize_screen :: proc(s: ^Screen, pty_fd: posix.FD) {
 process_output :: proc(s: ^Screen, data: []u8) {
 	current_w := s.in_alt_screen ? s.width : (s.width - GUTTER_W)
 
-	for b in data {
-		// Handle global control characters first (C0 set)
-		if b < 32 {
-			switch b {
-			case 0x1b:
-				// ESC
-				s.ansi_state = .Escape
-				s.ansi_idx = 0
-				continue
-			case 0x07:
-				// BEL (terminates some STR sequences)
-				if s.ansi_state == .STR {
-					handle_str_sequence(s)
-					s.ansi_state = .Ground
-				}
-				continue
-			case '\t', '\n', '\r', 8, 127:
-				// These are handled in Ground, but if we get them during a sequence,
-				// st typically executes them and remains in the sequence state.
-				if s.ansi_state == .Ground {
-					handle_control_char(s, b, current_w)
-					continue
-				}
-			}
+	i := 0
+	for i < len(data) {
+		// 1. If we are in the middle of an ANSI sequence, process byte-by-byte
+		if s.ansi_state != .Ground {
+			handle_ansi_byte(s, data[i])
+			i += 1
+			continue
 		}
 
-		switch s.ansi_state {
-		case .Ground:
-			write_char_to_grid(s, b, current_w)
+		r, width := utf8.decode_rune(data[i:])
 
-		case .Escape:
-			switch b {
-			case '[':
-				s.ansi_state = .CSI
-			case ']', 'P', '^', '_':
-				s.ansi_state = .STR
-				s.str_type = b
-				s.str_idx = 0
-			case '(', ')':
-				s.ansi_state = .Charset
-			case '#':
-				s.ansi_state = .Esc_Test
-			case:
-				// Handle single-char ESC sequences (e.g., ESC D, ESC M)
-				handle_esc_char(s, b)
-				s.ansi_state = .Ground
-			}
-
-		case .CSI:
-			// Collect params and intermediates
-			if b >= 0x40 && b <= 0x7E {
-				handle_csi_sequence(s, b)
-				s.ansi_state = .Ground
-			} else if s.ansi_idx < len(s.ansi_buf) - 1 {
-				s.ansi_buf[s.ansi_idx] = b
-				s.ansi_idx += 1
-			}
-
-		case .STR:
-			// String sequences end with ST (ESC \) or BEL (0x07)
-			if b == 0x1b {
-				// Potential ST transition (ESC \)
-				// For simplicity, handle_str_sequence can look for ST
-			} else if s.str_idx < len(s.str_buf) - 1 {
-				s.str_buf[s.str_idx] = b
-				s.str_idx += 1
-			}
-
-		case .Charset, .Esc_Test:
-			// Finalize these one-char state extensions
-			s.ansi_state = .Ground
+		if r == utf8.RUNE_ERROR && width <= 1 && i + width == len(data) {
+			break
 		}
+
+		if r < 32 || r == 127 {
+			handle_control_char(s, r, current_w)
+		} else {
+			write_rune_to_grid(s, r, current_w)
+		}
+
+		i += width
 	}
 }
 
+handle_ansi_byte :: proc(s: ^Screen, b: byte) {
+	switch s.ansi_state {
+	case .Escape:
+		switch b {
+		case '[':
+			s.ansi_state = .CSI
+			s.ansi_idx = 0
+		case ']', 'P', '^', '_':
+			s.ansi_state = .STR
+			s.str_type = rune(b)
+			s.str_idx = 0
+		case '(', ')':
+			s.ansi_state = .Charset
+		case '#':
+			s.ansi_state = .Esc_Test
+		case:
+			handle_esc_char(s, b)
+			s.ansi_state = .Ground
+		}
 
-// handle_csi_sequence :: proc(s: ^Screen, final: u8) {
-// 	params_str := string(s.ansi_buf[:s.ansi_idx])
+	case .CSI:
+		// Final characters for CSI are in the range 0x40-0x7E
+		if b >= 0x40 && b <= 0x7E {
+			handle_csi_sequence(s, b)
+			s.ansi_state = .Ground
+		} else if s.ansi_idx < len(s.ansi_buf) - 1 {
+			s.ansi_buf[s.ansi_idx] = b
+			s.ansi_idx += 1
+		}
 
-// 	args := strings.split(params_str, ";")
-// 	defer delete(args)
+	case .STR:
+		// Terminated by BEL (0x07) or ST (ESC \)
+		if b == 0x07 {
+			handle_str_sequence(s)
+			s.ansi_state = .Ground
+		} else if s.str_idx < len(s.str_buf) - 1 {
+			s.str_buf[s.str_idx] = rune(b)
+			s.str_idx += 1
+		}
+	// Note: Full ST (ESC \) detection requires more state
 
-// 	switch final {
-// 	case 'J':
-// 		mode := 0
-// 		if len(args) > 0 && len(args[0]) > 0 do mode = strconv.atoi(args[0])
-// 		// if s.ansi_idx > 0 {mode = int(s.ansi_buf[0] - '0')}
-// 		target_grid := s.in_alt_screen ? &s.alt_grid : &s.grid
-// 		switch mode {
-// 		case 0:
-// 			// clear from cursor to end of screen
-// 			idx := (s.cursor_y * s.width) + s.cursor_x
-// 			for i in idx ..< len(target_grid) {target_grid[i] = 0}
-// 		case 1:
-// 			// clear from beginning of screen to cursor
-// 			idx := (s.cursor_y * s.width) + s.cursor_x
-// 			for i in 0 ..< idx {target_grid[i] = 0}
-// 		case 2, 3:
-// 			for i in 0 ..< len(target_grid) {target_grid[i] = 0}
-// 			s.cursor_x = 0
-// 			s.cursor_y = 0
-// 		}
-// 	case 'K':
-// 		// Erase in Line
-// 		// 0 = cursor to end (default), 1 = start to cursor, 2 = whole line
-// 		row_start := s.cursor_y * s.width
-// 		term_view_w := max(1, s.width - GUTTER_W)
-// 		for x in s.cursor_x ..< term_view_w {
-// 			s.grid[row_start + x] = 0
-// 		}
-// 	case 'H', 'f':
-// 		row := 0
-// 		col := 0
+	case .Charset, .Esc_Test, .Ground:
+		s.ansi_state = .Ground
+	}
+}
 
-// 		if len(args) >= 1 && len(args[0]) > 0 {
-// 			row = max(0, strconv.atoi(args[0]) - 1)
-// 		}
-// 		if len(args) >= 2 && len(args[1]) > 0 {
-// 			col = max(0, strconv.atoi(args[1]) - 1)
-// 		}
-
-// 		s.cursor_y = clamp(row, 0, s.height - 1)
-// 		max_w := s.in_alt_screen ? s.width : (s.width - GUTTER_W)
-
-// 		s.cursor_x = clamp(col, 0, max_w - 1)
-// 	case 'h':
-// 		// Set Mode
-// 		if params_str == "?1049" {
-// 			if !s.in_alt_screen {
-// 				// save main cursor
-// 				s.alt_cursor_x = s.cursor_x
-// 				s.alt_cursor_y = s.cursor_y
-
-// 				s.in_alt_screen = true
-
-// 				// clear alt grid and reset cursor
-// 				for i in 0 ..< len(s.alt_grid) {
-// 					s.alt_grid[i] = 0
-// 				}
-// 				s.cursor_x = 0
-// 				s.cursor_y = 0
-
-// 				for i in 0 ..< s.height do s.dirty[i] = true
-// 			}
-// 		}
-// 	case 'l':
-// 		if params_str == "?1049" {
-// 			if s.in_alt_screen {
-// 				// exit alt mode
-// 				s.in_alt_screen = false
-
-// 				// restore main cursor
-// 				s.cursor_x = s.alt_cursor_x
-// 				s.cursor_y = s.alt_cursor_y
-
-
-// 				for i in 0 ..< s.height do s.dirty[i] = true
-// 			}
-// 		}
-// 	case 'm':
-// 		// Character Attributes (Color)
-// 		// We ignore colors for now to keep the grid as u8,
-// 		// but capturing 'm' prevents it from printing to screen.
-// 		return
-// 	}
-// }
-
-
-write_char_to_grid :: proc(s: ^Screen, b: u8, current_w: int) {
+write_rune_to_grid :: proc(s: ^Screen, b: rune, current_w: int) {
 	if b < 32 do return
 
 	idx := (s.cursor_y * s.width) + s.cursor_x
-	if s.in_alt_screen {
-		if idx < len(s.alt_grid) do s.alt_grid[idx] = b
-	} else {
-		if idx < len(s.grid) do s.grid[idx] = b
+	grid := s.in_alt_screen ? s.alt_grid : s.grid
+
+	if idx < len(grid) {
+		grid[idx] = b
+		s.dirty[s.cursor_y] = true
 	}
 
 	s.cursor_x += 1
@@ -256,7 +161,7 @@ write_char_to_grid :: proc(s: ^Screen, b: u8, current_w: int) {
 		s.cursor_x = 0
 		s.cursor_y = min(s.cursor_y + 1, s.height - 1)
 	}
-	if s.cursor_y < len(s.dirty) do s.dirty[s.cursor_y] = true
+
 	s.pty_cursor_x = s.cursor_x
 	s.pty_cursor_y = s.cursor_y
 }
@@ -288,7 +193,7 @@ handle_scrolling :: proc(s: ^Screen) {
 		s.cursor_y = s.height - 2
 
 		// 1. Capture the top row before shifting
-		line := make([]u8, s.width)
+		line := make([]rune, s.width)
 		copy(line, s.grid[0:s.width])
 		append(&s.scrollback, line)
 
@@ -308,7 +213,7 @@ handle_scrolling :: proc(s: ^Screen) {
 	}
 }
 
-get_row_data :: proc(abs_line: int) -> (row_data: []u8, is_history: bool) {
+get_row_data :: proc(abs_line: int) -> (row_data: []rune, is_history: bool) {
 
 	is_history = false
 	if abs_line <= screen.total_lines_scrolled {
@@ -347,8 +252,10 @@ draw_gutter :: proc(b: ^strings.Builder, y, abs_line, pty_cursor_y: int, is_hist
 	}
 }
 
-handle_control_char :: proc(s: ^Screen, b: u8, current_w: int) {
+handle_control_char :: proc(s: ^Screen, b: rune, current_w: int) {
 	switch b {
+	case 27:
+		s.ansi_state = .Escape
 	case 8, 127:
 		// Backspace
 		if s.cursor_x > 0 {
@@ -390,7 +297,7 @@ draw_screen :: proc() {
 		row_idx := history_len - screen.scroll_offset + y
 		abs_line := (screen.total_lines_scrolled + y + 1) - screen.scroll_offset
 
-		row_data: []u8
+		row_data: []rune
 		is_history := false
 		if screen.in_alt_screen {
 			start := y * screen.width
@@ -452,7 +359,7 @@ draw_status_bar :: proc(b: ^strings.Builder) {
 draw_grid :: proc(
 	b: ^strings.Builder,
 	y: int,
-	row_data: []u8,
+	row_data: []rune,
 	view_w: int,
 	is_in_selection: bool,
 ) {

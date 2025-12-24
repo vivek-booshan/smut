@@ -32,7 +32,7 @@ Mode :: enum {
 }
 
 Screen :: struct {
-	grid:                 [dynamic]u8,
+	grid:                 [dynamic]rune,
 	dirty:                [dynamic]bool,
 	width:                int,
 	height:               int,
@@ -47,11 +47,11 @@ Screen :: struct {
 	is_selecting:         bool,
 
 	// Command Buffer
-	cmd_buf:              [16]u8,
+	cmd_buf:              [16]rune,
 	cmd_idx:              int,
 
 	// --- SCROLLBACK ---
-	scrollback:           [dynamic][]u8,
+	scrollback:           [dynamic][]rune,
 	scroll_offset:        int,
 	total_lines_scrolled: int,
 
@@ -61,13 +61,13 @@ Screen :: struct {
 	ansi_idx:             int,
 
 	// String Buffer for OSC/DCS Sequences
-	str_buf:              [256]u8,
+	str_buf:              [256]rune,
 	str_idx:              int,
-	str_type:             u8,
+	str_type:             rune,
 
 	// ALTERNATE SCREEN BUFFER
 	in_alt_screen:        bool,
-	alt_grid:             [dynamic]u8,
+	alt_grid:             [dynamic]rune,
 	alt_cursor_x:         int,
 	alt_cursor_y:         int,
 	resize:               bool,
