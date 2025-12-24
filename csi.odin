@@ -104,16 +104,17 @@ handle_csi_sequence :: proc(s: ^Screen, b: u8) {
 
 handle_erase_in_line :: proc(s: ^Screen, mode: int) {
 	row_start := s.cursor_y * s.width
+	grid := s.in_alt_screen ? s.alt_grid : s.grid
 	switch mode {
 	case 0:
 		// Clear from cursor to end of line
-		for x in s.cursor_x ..< s.width {s.grid[row_start + x] = 0}
+		for x in s.cursor_x ..< s.width {grid[row_start + x] = 0}
 	case 1:
 		// Clear from start of line to cursor
-		for x in 0 ..< s.cursor_x + 1 {s.grid[row_start + x] = 0}
+		for x in 0 ..< s.cursor_x + 1 {grid[row_start + x] = 0}
 	case 2:
 		// Clear whole line
-		for x in 0 ..< s.width {s.grid[row_start + x] = 0}
+		for x in 0 ..< s.width {grid[row_start + x] = 0}
 	}
 	s.dirty[s.cursor_y] = true
 }
