@@ -169,11 +169,11 @@ handle_input :: proc(input: []u8, master_fd: posix.FD) {
 			continue
 		}
 
-		if b == 27 {
-			screen.mode = .Motion
-			screen.cmd_idx = 0
-			continue
-		}
+		// if b == 27 {
+		// 	screen.mode = .Motion
+		// 	screen.cmd_idx = 0
+		// 	continue
+		// }
 
 		posix.write(master_fd, &b, 1)
 	}
