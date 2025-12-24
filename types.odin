@@ -38,6 +38,8 @@ Screen :: struct {
 	height:               int,
 	cursor_x:             int,
 	cursor_y:             int,
+	main_cursor_x:        int,
+	main_cursor_y:        int,
 	pty_cursor_x:         int,
 	pty_cursor_y:         int,
 	mode:                 Mode,

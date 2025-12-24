@@ -244,6 +244,11 @@ process_output :: proc(s: ^Screen, data: []u8) {
 write_char_to_grid :: proc(s: ^Screen, b: u8, current_w: int) {
 	if b < 32 do return
 
+	if s.cursor_x >= current_w {
+		s.cursor_x = 0
+		s.cursor_y = min(s.cursor_y + 1, s.height - 2)
+	}
+
 	idx := (s.cursor_y * s.width) + s.cursor_x
 	if s.in_alt_screen {
 		if idx < len(s.alt_grid) do s.alt_grid[idx] = b
@@ -251,12 +256,8 @@ write_char_to_grid :: proc(s: ^Screen, b: u8, current_w: int) {
 		if idx < len(s.grid) do s.grid[idx] = b
 	}
 
-	s.cursor_x += 1
-	if s.cursor_x >= current_w {
-		s.cursor_x = 0
-		s.cursor_y = min(s.cursor_y + 1, s.height - 1)
-	}
 	if s.cursor_y < len(s.dirty) do s.dirty[s.cursor_y] = true
+	s.cursor_x += 1
 	s.pty_cursor_x = s.cursor_x
 	s.pty_cursor_y = s.cursor_y
 }
@@ -284,26 +285,38 @@ handle_esc_char :: proc(s: ^Screen, b: u8) {
 
 MAX_SCROLLBACK :: 1000
 handle_scrolling :: proc(s: ^Screen) {
+	// Status bar is at height-1, so height-2 is our last usable row
 	if s.cursor_y >= s.height - 1 {
 		s.cursor_y = s.height - 2
 
-		// 1. Capture the top row before shifting
-		line := make([]u8, s.width)
-		copy(line, s.grid[0:s.width])
-		append(&s.scrollback, line)
+		if s.in_alt_screen {
+			// Vim/TUI mode: Just shift the alt_grid, no history capture
+			start_read := s.width
+			copy(s.alt_grid[0:], s.alt_grid[start_read:])
 
-		s.total_lines_scrolled += 1
-		// 2. Limit history (e.g., 1000 lines)
-		if len(s.scrollback) > MAX_SCROLLBACK {
-			delete(s.scrollback[0])
-			ordered_remove(&s.scrollback, 0)
+			// Clear the new bottom line
+			bottom_row_start := (s.height - 2) * s.width
+			for i in 0 ..< s.width {s.alt_grid[bottom_row_start + i] = 0}
+		} else {
+			// Shell mode: Save the top line to history and shift main grid
+			line := make([]u8, s.width)
+			copy(line, s.grid[0:s.width])
+			append(&s.scrollback, line)
+			s.total_lines_scrolled += 1
+
+			if len(s.scrollback) > MAX_SCROLLBACK {
+				delete(s.scrollback[0])
+				ordered_remove(&s.scrollback, 0)
+			}
+
+			start_read := s.width
+			copy(s.grid[0:], s.grid[start_read:])
+
+			bottom_row_start := (s.height - 2) * s.width
+			for i in 0 ..< s.width {s.grid[bottom_row_start + i] = 0}
 		}
 
-		start_read := s.width
-		copy(s.grid[0:], s.grid[start_read:])
-
-		bottom_row_start := (s.height - 1) * s.width
-		for i in 0 ..< s.width {s.grid[bottom_row_start + i] = 0}
+		// Mark all lines dirty for a full redraw after a scroll
 		for i in 0 ..< s.height {s.dirty[i] = true}
 	}
 }
@@ -349,6 +362,8 @@ draw_gutter :: proc(b: ^strings.Builder, y, abs_line, pty_cursor_y: int, is_hist
 
 handle_control_char :: proc(s: ^Screen, b: u8, current_w: int) {
 	switch b {
+	case 27:
+		s.ansi_state = .Escape
 	case 8, 127:
 		// Backspace
 		if s.cursor_x > 0 {
