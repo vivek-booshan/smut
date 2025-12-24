@@ -7,6 +7,7 @@ import "core:sys/darwin"
 import "core:sys/posix"
 import "core:unicode/utf8"
 
+
 resize_screen :: proc(s: ^Screen, pty_fd: posix.FD) {
 	ws: struct {
 		r, c, x, y: u16,
@@ -99,20 +100,39 @@ process_output :: proc(s: ^Screen, data: []u8) {
 
 	i := 0
 	for i < len(data) {
-		// 1. If we are in the middle of an ANSI sequence, process byte-by-byte
+
+		b := data[i]
+		// High Priority Byte
+		if b < CONTROL_CODES {
+			switch b {
+			case ESC:
+				s.ansi_state = .Escape
+				s.ansi_idx = 0
+				i += 1
+				continue
+			case BEL:
+				if s.ansi_state == .STR {
+					handle_str_sequence(s)
+					s.ansi_state = .Ground
+				}
+				i += 1
+				continue
+			}
+		}
+
+		// Non Ground State Dispatch
 		if s.ansi_state != .Ground {
-			handle_ansi_byte(s, data[i])
+			handle_ansi_byte(s, b)
 			i += 1
 			continue
 		}
 
+		// Ground State Dispatch
 		r, width := utf8.decode_rune(data[i:])
+		partial_rune := r == utf8.RUNE_ERROR && width <= 1 && i + width == len(data)
+		if partial_rune do break
 
-		if r == utf8.RUNE_ERROR && width <= 1 && i + width == len(data) {
-			break
-		}
-
-		if r < 32 || r == 127 {
+		if r < CONTROL_CODES || r == DEL {
 			handle_control_char(s, r, current_w)
 		} else {
 			write_rune_to_grid(s, r, current_w)
@@ -154,7 +174,7 @@ handle_ansi_byte :: proc(s: ^Screen, b: byte) {
 
 	case .STR:
 		// Terminated by BEL (0x07) or ST (ESC \)
-		if b == 0x07 {
+		if b == BEL {
 			handle_str_sequence(s)
 			s.ansi_state = .Ground
 		} else if s.str_idx < len(s.str_buf) - 1 {
@@ -169,7 +189,7 @@ handle_ansi_byte :: proc(s: ^Screen, b: byte) {
 }
 
 write_rune_to_grid :: proc(s: ^Screen, b: rune, current_w: int) {
-	if b < 32 do return
+	if b < CONTROL_CODES do return
 
 	if s.cursor_x >= current_w {
 		s.cursor_x = 0
@@ -198,50 +218,21 @@ handle_str_sequence :: proc(s: ^Screen) {
 	}
 }
 
+INDEX :: 'D' // Line Feed
+REVERSE_INDEX :: 'M' // Move Cursor Up? It just works ig
+RIS :: 'c' // Reset to Initial State
 handle_esc_char :: proc(s: ^Screen, b: u8) {
 	switch b {
-	case 'D':
-		// Index (Line Feed)
+	case INDEX:
 		handle_control_char(s, '\n', s.width)
-	case 'M':
-		// Reverse Index (Move cursor up)
+	case REVERSE_INDEX:
 		s.cursor_y = max(0, s.cursor_y - 1)
-	case 'c': // RIS (Reset to Initial State)
+	case RIS:
 	// Clear screen, reset modes
 	}
 }
 
 MAX_SCROLLBACK :: 1000
-// handle_scrolling :: proc(s: ^Screen) {
-// 	limit := s.scroll_bottom > 0 ? s.scroll_bottom : s.height - 2
-// 	if s.cursor_y >= limit {
-// 		s.cursor_y = limit
-
-// 		if s.in_alt_screen {
-// 			start_read := s.width
-// 			copy(s.alt_grid[0:], s.alt_grid[start_read:])
-// 		} else {
-// 			line := make([]rune, s.width)
-// 			copy(line, s.grid[0:s.width])
-
-// 			append(&s.scrollback, line)
-// 			s.total_lines_scrolled += 1
-
-// 			if len(s.scrollback) > MAX_SCROLLBACK {
-// 				delete(s.scrollback[0])
-// 				ordered_remove(&s.scrollback, 0)
-// 			}
-
-// 			start_read := s.width
-// 			copy(s.grid[0:], s.grid[start_read:])
-// 		}
-
-// 		grid := s.in_alt_screen ? s.alt_grid : s.grid
-// 		bottom_row_start := (s.height - 1) * s.width
-// 		for i in 0 ..< s.width {grid[bottom_row_start + i] = 0}
-// 		for i in 0 ..< s.height {s.dirty[i] = true}
-// 	}
-// }
 handle_scrolling :: proc(s: ^Screen) {
 	limit := s.scroll_bottom > 0 ? s.scroll_bottom : s.height - 2
 	if s.cursor_y > limit {
@@ -305,10 +296,10 @@ draw_gutter :: proc(b: ^strings.Builder, y, abs_line, pty_cursor_y: int, is_hist
 
 handle_control_char :: proc(s: ^Screen, b: rune, current_w: int) {
 	switch b {
-	case 27:
+	case ESC:
 		s.ansi_state = .Escape
 		s.ansi_idx = 0
-	case 8, 127:
+	case BACKSPACE, DEL:
 		// Backspace
 		if s.cursor_x > 0 {
 			s.cursor_x -= 1

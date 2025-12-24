@@ -4,6 +4,19 @@ import "core:sys/posix"
 
 GUTTER_W :: 4
 
+CONTROL_CODES :: 32
+DEL :: 127
+BEL :: 0x07
+TAB :: 0x09
+LF :: 0x0a // new line / line feed
+CR :: 0x0d // carriage return
+ESC :: 0x1b // 27
+BACKSPACE :: 8
+CUP :: 0x48 // cursor up
+ED :: 0x4a // Erase in Display
+SGR :: 0x6D // Set Graphic Rendition
+SM :: 0x68 // Set Mode
+
 Key :: enum u8 {
 	NONE      = 0,
 	CTRLB     = 2,
