@@ -7,6 +7,8 @@ import "core:sys/darwin"
 import "core:sys/posix"
 import "core:sys/unix"
 
+TIOCSWINSZ :: 0x80087467
+
 foreign import libc "system:c"
 foreign libc {
 	ioctl :: proc(fd: i32, request: u32, arg: rawptr) -> i32 ---
@@ -50,7 +52,7 @@ set_window_size :: proc(fd: posix.FD, cols, rows: int) {
 		r, c, x, y: u16,
 	}{u16(rows), u16(cols), 0, 0}
 	// ioctl(cast(i32)fd, 0x5414, &ws) // TIOCSWINSZ
-	darwin.syscall_ioctl(cast(i32)fd, darwin.TIOCGWINSZ, &ws) //TIOCSWINSZ
+	darwin.syscall_ioctl(cast(i32)fd, TIOCSWINSZ, &ws) //TIOCSWINSZ
 }
 
 cfmakeraw :: proc(t: ^posix.termios) {
