@@ -12,6 +12,7 @@ Key :: enum u8 {
 	ENTER     = 13,
 	ESCAPE    = 27,
 	DELETE    = 127,
+	ESCSEQ    = 0x1b,
 }
 
 AnsiState :: enum {
