@@ -2,7 +2,7 @@ package smut
 
 import "core:sys/posix"
 
-GUTTER_W :: 4
+GUTTER_W :: 5
 
 CONTROL_CODES :: 32
 DEL :: 127

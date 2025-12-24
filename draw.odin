@@ -6,7 +6,7 @@ import "core:sys/darwin"
 import "core:sys/posix"
 import "core:unicode/utf8"
 
-MAX_SCROLLBACK :: 1000
+MAX_SCROLLBACK :: 4096
 
 resize_screen :: proc(s: ^Screen, pty_fd: posix.FD) {
 	ws: struct {
@@ -244,6 +244,10 @@ handle_scrollback :: proc(s: ^Screen) {
 		if len(s.scrollback) > MAX_SCROLLBACK {
 			delete(s.scrollback[0])
 			ordered_remove(&s.scrollback, 0)
+
+			if s.scroll_offset > 0 {
+				s.scroll_offset = min(s.scroll_offset, len(s.scrollback))
+			}
 		}
 	}
 }
@@ -281,9 +285,16 @@ handle_scrolling :: proc(s: ^Screen) {
 get_row_data :: proc(abs_line: int) -> (row_data: []rune, is_history: bool) {
 
 	is_history = false
+	history_start := max(1, screen.total_lines_scrolled - len(screen.scrollback) + 1)
+
+	if abs_line < history_start {
+		return nil, false
+	}
+
 	if abs_line <= screen.total_lines_scrolled {
-		if abs_line > 0 && abs_line <= len(screen.scrollback) {
-			row_data = screen.scrollback[abs_line - 1]
+		idx := abs_line - history_start
+		if idx > 0 && idx < len(screen.scrollback) {
+			row_data = screen.scrollback[idx]
 			is_history = true
 		}
 	} else {
@@ -306,11 +317,12 @@ draw_gutter :: proc(b: ^strings.Builder, y, abs_line, pty_cursor_y: int, is_hist
 	grid_y_live := abs_line - screen.total_lines_scrolled - 1
 
 	if is_history || (grid_y_live >= 0 && grid_y_live <= pty_cursor_y) {
+		width := GUTTER_W - 1
 		if y == screen.cursor_y {
-			fmt.sbprintf(b, "\x1b[33;49m%3d \x1b[0m", abs_line)
+			fmt.sbprintf(b, "\x1b[33;49m%*d \x1b[0m", width, abs_line)
 		} else {
 			rel_num := abs(y - screen.cursor_y)
-			fmt.sbprintf(b, "\x1b[90;49m%3d \x1b[0m", rel_num)
+			fmt.sbprintf(b, "\x1b[90;49m%*d \x1b[0m", width, rel_num)
 		}
 	} else {
 		fmt.sbprintf(b, "\x1b[49m%*s", GUTTER_W, "")
