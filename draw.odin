@@ -6,43 +6,6 @@ import "core:strings"
 import "core:sys/darwin"
 import "core:sys/posix"
 
-// resize_screen :: proc(s: ^Screen, pty_fd: posix.FD) {
-// 	ws: struct {
-// 		r, c, x, y: u16,
-// 	}
-
-// 	// Get Host Terminal Size using STDOUT 
-// 	if darwin.syscall_ioctl(posix.STDOUT_FILENO, darwin.TIOCGWINSZ, &ws) != -1 && ws.r > 0 {
-// 		s.width = int(ws.c)
-// 		s.height = int(ws.r)
-// 	} else {
-// 		s.width, s.height = 80, 24
-// 	}
-
-// 	total_cells := s.width * s.height
-// 	if len(s.grid) != total_cells || len(s.dirty) != s.height {
-// 		delete(s.grid)
-// 		s.grid = make([dynamic]u8, total_cells)
-
-// 		delete(s.dirty)
-// 		s.dirty = make([dynamic]bool, s.height)
-// 		for i in 0 ..< s.height {s.dirty[i] = true}
-// 		s.cursor_x = clamp(s.cursor_x, 0, max(0, s.width - GUTTER_W - 1))
-// 		s.cursor_y = clamp(s.cursor_y, 0, max(0, s.height - 1))
-
-// 		if len(s.alt_grid) > 0 do delete(s.alt_grid)
-// 		s.alt_grid = make([dynamic]u8, total_cells)
-// 		for i in 0 ..< total_cells {
-// 			s.alt_grid[i] = 0
-// 		}
-// 		// if s.cursor_x >= s.width - GUTTER_W {s.cursor_x = max(0, (s.width - GUTTER_W) - 1)}
-// 		// if s.cursor_y >= s.height {s.cursor_y = max(0, s.height - 1)}
-// 	}
-
-// 	// Update child process of new size minus gutter [cite: 9]
-// 	term_w := max(1, s.width - GUTTER_W)
-// 	set_window_size(pty_fd, term_w, s.height - 1)
-// }
 resize_screen :: proc(s: ^Screen, pty_fd: posix.FD) {
 	ws: struct {
 		r, c, x, y: u16,
@@ -186,126 +149,97 @@ process_output :: proc(s: ^Screen, data: []u8) {
 }
 
 
-handle_csi_sequence :: proc(s: ^Screen, final: u8) {
-	params_str := string(s.ansi_buf[:s.ansi_idx])
+// handle_csi_sequence :: proc(s: ^Screen, final: u8) {
+// 	params_str := string(s.ansi_buf[:s.ansi_idx])
 
-	args := strings.split(params_str, ";")
-	defer delete(args)
+// 	args := strings.split(params_str, ";")
+// 	defer delete(args)
 
-	switch final {
-	case 'J':
-		mode := 0
-		if len(args) > 0 && len(args[0]) > 0 do mode = strconv.atoi(args[0])
-		// if s.ansi_idx > 0 {mode = int(s.ansi_buf[0] - '0')}
-		target_grid := s.in_alt_screen ? &s.alt_grid : &s.grid
-		switch mode {
-		case 0:
-			// clear from cursor to end of screen
-			idx := (s.cursor_y * s.width) + s.cursor_x
-			for i in idx ..< len(target_grid) {target_grid[i] = 0}
-		case 1:
-			// clear from beginning of screen to cursor
-			idx := (s.cursor_y * s.width) + s.cursor_x
-			for i in 0 ..< idx {target_grid[i] = 0}
-		case 2, 3:
-			for i in 0 ..< len(target_grid) {target_grid[i] = 0}
-			s.cursor_x = 0
-			s.cursor_y = 0
-		}
-	case 'K':
-		// Erase in Line
-		// 0 = cursor to end (default), 1 = start to cursor, 2 = whole line
-		row_start := s.cursor_y * s.width
-		term_view_w := max(1, s.width - GUTTER_W)
-		for x in s.cursor_x ..< term_view_w {
-			s.grid[row_start + x] = 0
-		}
-	case 'H', 'f':
-		row := 0
-		col := 0
+// 	switch final {
+// 	case 'J':
+// 		mode := 0
+// 		if len(args) > 0 && len(args[0]) > 0 do mode = strconv.atoi(args[0])
+// 		// if s.ansi_idx > 0 {mode = int(s.ansi_buf[0] - '0')}
+// 		target_grid := s.in_alt_screen ? &s.alt_grid : &s.grid
+// 		switch mode {
+// 		case 0:
+// 			// clear from cursor to end of screen
+// 			idx := (s.cursor_y * s.width) + s.cursor_x
+// 			for i in idx ..< len(target_grid) {target_grid[i] = 0}
+// 		case 1:
+// 			// clear from beginning of screen to cursor
+// 			idx := (s.cursor_y * s.width) + s.cursor_x
+// 			for i in 0 ..< idx {target_grid[i] = 0}
+// 		case 2, 3:
+// 			for i in 0 ..< len(target_grid) {target_grid[i] = 0}
+// 			s.cursor_x = 0
+// 			s.cursor_y = 0
+// 		}
+// 	case 'K':
+// 		// Erase in Line
+// 		// 0 = cursor to end (default), 1 = start to cursor, 2 = whole line
+// 		row_start := s.cursor_y * s.width
+// 		term_view_w := max(1, s.width - GUTTER_W)
+// 		for x in s.cursor_x ..< term_view_w {
+// 			s.grid[row_start + x] = 0
+// 		}
+// 	case 'H', 'f':
+// 		row := 0
+// 		col := 0
 
-		if len(args) >= 1 && len(args[0]) > 0 {
-			row = max(0, strconv.atoi(args[0]) - 1)
-		}
-		if len(args) >= 2 && len(args[1]) > 0 {
-			col = max(0, strconv.atoi(args[1]) - 1)
-		}
+// 		if len(args) >= 1 && len(args[0]) > 0 {
+// 			row = max(0, strconv.atoi(args[0]) - 1)
+// 		}
+// 		if len(args) >= 2 && len(args[1]) > 0 {
+// 			col = max(0, strconv.atoi(args[1]) - 1)
+// 		}
 
-		s.cursor_y = clamp(row, 0, s.height - 1)
-		max_w := s.in_alt_screen ? s.width : (s.width - GUTTER_W)
+// 		s.cursor_y = clamp(row, 0, s.height - 1)
+// 		max_w := s.in_alt_screen ? s.width : (s.width - GUTTER_W)
 
-		s.cursor_x = clamp(col, 0, max_w - 1)
-	case 'h':
-		// Set Mode
-		if params_str == "?1049" {
-			if !s.in_alt_screen {
-				// save main cursor
-				s.alt_cursor_x = s.cursor_x
-				s.alt_cursor_y = s.cursor_y
+// 		s.cursor_x = clamp(col, 0, max_w - 1)
+// 	case 'h':
+// 		// Set Mode
+// 		if params_str == "?1049" {
+// 			if !s.in_alt_screen {
+// 				// save main cursor
+// 				s.alt_cursor_x = s.cursor_x
+// 				s.alt_cursor_y = s.cursor_y
 
-				s.in_alt_screen = true
+// 				s.in_alt_screen = true
 
-				// clear alt grid and reset cursor
-				for i in 0 ..< len(s.alt_grid) {
-					s.alt_grid[i] = 0
-				}
-				s.cursor_x = 0
-				s.cursor_y = 0
+// 				// clear alt grid and reset cursor
+// 				for i in 0 ..< len(s.alt_grid) {
+// 					s.alt_grid[i] = 0
+// 				}
+// 				s.cursor_x = 0
+// 				s.cursor_y = 0
 
-				for i in 0 ..< s.height do s.dirty[i] = true
-			}
-		}
-	case 'l':
-		if params_str == "?1049" {
-			if s.in_alt_screen {
-				// exit alt mode
-				s.in_alt_screen = false
+// 				for i in 0 ..< s.height do s.dirty[i] = true
+// 			}
+// 		}
+// 	case 'l':
+// 		if params_str == "?1049" {
+// 			if s.in_alt_screen {
+// 				// exit alt mode
+// 				s.in_alt_screen = false
 
-				// restore main cursor
-				s.cursor_x = s.alt_cursor_x
-				s.cursor_y = s.alt_cursor_y
+// 				// restore main cursor
+// 				s.cursor_x = s.alt_cursor_x
+// 				s.cursor_y = s.alt_cursor_y
 
 
-				for i in 0 ..< s.height do s.dirty[i] = true
-			}
-		}
-	case 'm':
-		// Character Attributes (Color)
-		// We ignore colors for now to keep the grid as u8,
-		// but capturing 'm' prevents it from printing to screen.
-		return
-	}
-}
+// 				for i in 0 ..< s.height do s.dirty[i] = true
+// 			}
+// 		}
+// 	case 'm':
+// 		// Character Attributes (Color)
+// 		// We ignore colors for now to keep the grid as u8,
+// 		// but capturing 'm' prevents it from printing to screen.
+// 		return
+// 	}
+// }
 
-// smut/draw.odin
-
-handle_control_char :: proc(s: ^Screen, b: u8, current_w: int) {
-	switch b {
-	case 8, 127:
-		// Backspace
-		if s.cursor_x > 0 {
-			s.cursor_x -= 1
-			idx := (s.cursor_y * s.width) + s.cursor_x
-			target := s.in_alt_screen ? &s.alt_grid : &s.grid
-			if idx < len(target) do target[idx] = 0
-			if s.cursor_y < len(s.dirty) do s.dirty[s.cursor_y] = true
-		}
-		s.pty_cursor_x = s.cursor_x
-	case '\t':
-		s.cursor_x = (s.cursor_x + 8) & ~int(7)
-		if s.cursor_x >= current_w do s.cursor_x = current_w - 1
-		if s.cursor_y < len(s.dirty) do s.dirty[s.cursor_y] = true
-		s.pty_cursor_x = s.cursor_x
-	case '\n':
-		s.cursor_y += 1
-		handle_scrolling(s)
-		s.pty_cursor_y = s.cursor_y
-		if s.cursor_y < len(s.dirty) do s.dirty[s.cursor_y] = true
-	case '\r':
-		s.cursor_x = 0
-		s.pty_cursor_x = 0
-	}
-}
 
 write_char_to_grid :: proc(s: ^Screen, b: u8, current_w: int) {
 	if b < 32 do return
@@ -412,6 +346,35 @@ draw_gutter :: proc(b: ^strings.Builder, y, abs_line, pty_cursor_y: int, is_hist
 		fmt.sbprintf(b, "\x1b[49m%*s", GUTTER_W, "")
 	}
 }
+
+handle_control_char :: proc(s: ^Screen, b: u8, current_w: int) {
+	switch b {
+	case 8, 127:
+		// Backspace
+		if s.cursor_x > 0 {
+			s.cursor_x -= 1
+			idx := (s.cursor_y * s.width) + s.cursor_x
+			target := s.in_alt_screen ? &s.alt_grid : &s.grid
+			if idx < len(target) do target[idx] = 0
+			if s.cursor_y < len(s.dirty) do s.dirty[s.cursor_y] = true
+		}
+		s.pty_cursor_x = s.cursor_x
+	case '\t':
+		s.cursor_x = (s.cursor_x + 8) & ~int(7)
+		if s.cursor_x >= current_w do s.cursor_x = current_w - 1
+		if s.cursor_y < len(s.dirty) do s.dirty[s.cursor_y] = true
+		s.pty_cursor_x = s.cursor_x
+	case '\n':
+		s.cursor_y += 1
+		handle_scrolling(s)
+		s.pty_cursor_y = s.cursor_y
+		if s.cursor_y < len(s.dirty) do s.dirty[s.cursor_y] = true
+	case '\r':
+		s.cursor_x = 0
+		s.pty_cursor_x = 0
+	}
+}
+
 
 draw_screen :: proc() {
 	b := strings.builder_make()
