@@ -6,6 +6,8 @@ import "core:strings"
 import "core:sys/darwin"
 import "core:sys/posix"
 
+MAX_SCROLLBACK :: 1000
+
 resize_screen :: proc(s: ^Screen, pty_fd: posix.FD) {
 	ws: struct {
 		r, c, x, y: u16,
@@ -283,7 +285,6 @@ handle_esc_char :: proc(s: ^Screen, b: u8) {
 	}
 }
 
-MAX_SCROLLBACK :: 1000
 handle_scrolling :: proc(s: ^Screen) {
 	// Status bar is at height-1, so height-2 is our last usable row
 	if s.cursor_y >= s.height - 1 {
