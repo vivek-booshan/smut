@@ -151,7 +151,7 @@ write_rune_to_grid :: proc(s: ^Screen, b: rune, current_w: int) {
 
 	if s.cursor_x >= current_w {
 		s.cursor_x = 0
-		s.cursor_y = min(s.cursor_y + 1, s.height - 1)
+		s.cursor_y = min(s.cursor_y + 1, s.height - 2)
 	}
 
 	idx := (s.cursor_y * s.width) + s.cursor_x
@@ -194,20 +194,24 @@ handle_scrolling :: proc(s: ^Screen) {
 	if s.cursor_y >= s.height - 1 {
 		s.cursor_y = s.height - 2
 
-		// 1. Capture the top row before shifting
-		line := make([]rune, s.width)
-		copy(line, s.grid[0:s.width])
-		append(&s.scrollback, line)
+		if s.in_alt_screen {
+			start_read := s.width
+			copy(s.alt_grid[0:], s.alt_grid[start_read:])
+		} else {
+			line := make([]rune, s.width)
+			copy(line, s.grid[0:s.width])
 
-		s.total_lines_scrolled += 1
-		// 2. Limit history (e.g., 1000 lines)
-		if len(s.scrollback) > MAX_SCROLLBACK {
-			delete(s.scrollback[0])
-			ordered_remove(&s.scrollback, 0)
+			append(&s.scrollback, line)
+			s.total_lines_scrolled += 1
+
+			if len(s.scrollback) > MAX_SCROLLBACK {
+				delete(s.scrollback[0])
+				ordered_remove(&s.scrollback, 0)
+			}
+
+			start_read := s.width
+			copy(s.grid[0:], s.grid[start_read:])
 		}
-
-		start_read := s.width
-		copy(s.grid[0:], s.grid[start_read:])
 
 		bottom_row_start := (s.height - 1) * s.width
 		for i in 0 ..< s.width {s.grid[bottom_row_start + i] = 0}
@@ -263,7 +267,7 @@ handle_control_char :: proc(s: ^Screen, b: rune, current_w: int) {
 		if s.cursor_x > 0 {
 			s.cursor_x -= 1
 			idx := (s.cursor_y * s.width) + s.cursor_x
-			target := s.in_alt_screen ? &s.alt_grid : &s.grid
+			target := s.in_alt_screen ? s.alt_grid : s.grid
 			if idx < len(target) do target[idx] = 0
 			if s.cursor_y < len(s.dirty) do s.dirty[s.cursor_y] = true
 		}

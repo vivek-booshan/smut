@@ -165,9 +165,8 @@ handle_input :: proc(input: []u8, master_fd: posix.FD) {
 		if screen.mode == .Motion || screen.mode == .Select {
 			status_bar_keystroke_buffer(rune(b))
 			count := command_multiplier()
-			if handle_motion_inputs(b, count) {
-				continue
-			}
+			handle_motion_inputs(b, count)
+			continue
 		}
 
 		if b == 27 {

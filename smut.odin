@@ -27,7 +27,7 @@ main :: proc() {
 		posix.close(master_fd)
 		login_tty(slave_fd)
 		// Set initial size for the shell based on fetched dimensions
-		set_window_size(slave_fd, screen.width - GUTTER_W, screen.height)
+		set_window_size(slave_fd, screen.width - GUTTER_W, screen.height - 1)
 		posix.execl("/bin/bash", "bash", nil)
 		posix.exit(1)
 	}
