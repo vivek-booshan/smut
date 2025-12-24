@@ -148,6 +148,12 @@ handle_ansi_byte :: proc(s: ^Screen, b: byte) {
 write_rune_to_grid :: proc(s: ^Screen, b: rune, current_w: int) {
 	if b < 32 do return
 
+
+	if s.cursor_x >= current_w {
+		s.cursor_x = 0
+		s.cursor_y = min(s.cursor_y + 1, s.height - 1)
+	}
+
 	idx := (s.cursor_y * s.width) + s.cursor_x
 	grid := s.in_alt_screen ? s.alt_grid : s.grid
 
@@ -157,10 +163,6 @@ write_rune_to_grid :: proc(s: ^Screen, b: rune, current_w: int) {
 	}
 
 	s.cursor_x += 1
-	if s.cursor_x >= current_w {
-		s.cursor_x = 0
-		s.cursor_y = min(s.cursor_y + 1, s.height - 1)
-	}
 
 	s.pty_cursor_x = s.cursor_x
 	s.pty_cursor_y = s.cursor_y
