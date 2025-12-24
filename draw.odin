@@ -71,6 +71,29 @@ resize_screen :: proc(s: ^Screen, pty_fd: posix.FD) {
 	set_window_size(pty_fd, term_w, s.height - 1)
 }
 
+// process_output :: proc(s: ^Screen, data: []u8) {
+// 	current_w := s.in_alt_screen ? s.width : (s.width - GUTTER_W)
+
+// 	for b in data {
+// 		switch s.ansi_state {
+// 		case .Ground:
+// 			if b < 32 || b == 127 {
+// 				handle_control_char(s, rune(b), current_w)
+// 			} else {
+// 				write_rune_to_grid(s, rune(b), current_w)
+// 			}
+// 		case .Escape:
+// 			handle_esc_char(s, b)
+// 		case .CSI:
+// 			handle_csi_sequence(s, b)
+// 		case .STR:
+// 			handle_str_sequence(s)
+// 		case .Charset, .Esc_Test:
+// 			s.ansi_state = .Ground
+// 		}
+// 	}
+// }
+
 process_output :: proc(s: ^Screen, data: []u8) {
 	current_w := s.in_alt_screen ? s.width : (s.width - GUTTER_W)
 
@@ -148,7 +171,6 @@ handle_ansi_byte :: proc(s: ^Screen, b: byte) {
 write_rune_to_grid :: proc(s: ^Screen, b: rune, current_w: int) {
 	if b < 32 do return
 
-
 	if s.cursor_x >= current_w {
 		s.cursor_x = 0
 		s.cursor_y = min(s.cursor_y + 1, s.height - 2)
@@ -190,32 +212,55 @@ handle_esc_char :: proc(s: ^Screen, b: u8) {
 }
 
 MAX_SCROLLBACK :: 1000
+// handle_scrolling :: proc(s: ^Screen) {
+// 	limit := s.scroll_bottom > 0 ? s.scroll_bottom : s.height - 2
+// 	if s.cursor_y >= limit {
+// 		s.cursor_y = limit
+
+// 		if s.in_alt_screen {
+// 			start_read := s.width
+// 			copy(s.alt_grid[0:], s.alt_grid[start_read:])
+// 		} else {
+// 			line := make([]rune, s.width)
+// 			copy(line, s.grid[0:s.width])
+
+// 			append(&s.scrollback, line)
+// 			s.total_lines_scrolled += 1
+
+// 			if len(s.scrollback) > MAX_SCROLLBACK {
+// 				delete(s.scrollback[0])
+// 				ordered_remove(&s.scrollback, 0)
+// 			}
+
+// 			start_read := s.width
+// 			copy(s.grid[0:], s.grid[start_read:])
+// 		}
+
+// 		grid := s.in_alt_screen ? s.alt_grid : s.grid
+// 		bottom_row_start := (s.height - 1) * s.width
+// 		for i in 0 ..< s.width {grid[bottom_row_start + i] = 0}
+// 		for i in 0 ..< s.height {s.dirty[i] = true}
+// 	}
+// }
 handle_scrolling :: proc(s: ^Screen) {
-	if s.cursor_y >= s.height - 1 {
-		s.cursor_y = s.height - 2
+	limit := s.scroll_bottom > 0 ? s.scroll_bottom : s.height - 2
+	if s.cursor_y > limit {
+		s.cursor_y = limit
 
-		if s.in_alt_screen {
-			start_read := s.width
-			copy(s.alt_grid[0:], s.alt_grid[start_read:])
-		} else {
-			line := make([]rune, s.width)
-			copy(line, s.grid[0:s.width])
+		grid := s.in_alt_screen ? s.alt_grid : s.grid
 
-			append(&s.scrollback, line)
-			s.total_lines_scrolled += 1
+		// Shift within the region
+		dst_start := s.scroll_top * s.width
+		src_start := (s.scroll_top + 1) * s.width
+		len_bytes := (s.scroll_bottom - s.scroll_top) * s.width
 
-			if len(s.scrollback) > MAX_SCROLLBACK {
-				delete(s.scrollback[0])
-				ordered_remove(&s.scrollback, 0)
-			}
+		copy(grid[dst_start:], grid[src_start:src_start + len_bytes])
 
-			start_read := s.width
-			copy(s.grid[0:], s.grid[start_read:])
-		}
+		// Clear only the bottom row of the scrolling region
+		clear_start := s.scroll_bottom * s.width
+		for i in 0 ..< s.width {grid[clear_start + i] = 0}
 
-		bottom_row_start := (s.height - 1) * s.width
-		for i in 0 ..< s.width {s.grid[bottom_row_start + i] = 0}
-		for i in 0 ..< s.height {s.dirty[i] = true}
+		for i in s.scroll_top ..= s.scroll_bottom {s.dirty[i] = true}
 	}
 }
 
@@ -262,6 +307,7 @@ handle_control_char :: proc(s: ^Screen, b: rune, current_w: int) {
 	switch b {
 	case 27:
 		s.ansi_state = .Escape
+		s.ansi_idx = 0
 	case 8, 127:
 		// Backspace
 		if s.cursor_x > 0 {

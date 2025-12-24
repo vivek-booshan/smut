@@ -62,7 +62,7 @@ main :: proc() {
 			{fd = master_fd, events = {.IN}},
 		}
 
-		// Wait for data or signal [cite: 6, 7]
+		// wait for data
 		if posix.poll(&fds[0], 2, -1) < 0 {
 			continue
 		}
