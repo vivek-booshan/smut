@@ -1,12 +1,12 @@
 package smut
 
 import "core:fmt"
-// import "core:strconv"
 import "core:strings"
 import "core:sys/darwin"
 import "core:sys/posix"
 import "core:unicode/utf8"
 
+MAX_SCROLLBACK :: 1000
 
 resize_screen :: proc(s: ^Screen, pty_fd: posix.FD) {
 	ws: struct {
@@ -193,7 +193,9 @@ write_rune_to_grid :: proc(s: ^Screen, b: rune, current_w: int) {
 
 	if s.cursor_x >= current_w {
 		s.cursor_x = 0
+		// s.cursor_y += 1
 		s.cursor_y = min(s.cursor_y + 1, s.height - 2)
+		handle_scrolling(s)
 	}
 
 	idx := (s.cursor_y * s.width) + s.cursor_x
@@ -232,26 +234,47 @@ handle_esc_char :: proc(s: ^Screen, b: u8) {
 	}
 }
 
-MAX_SCROLLBACK :: 1000
+handle_scrollback :: proc(s: ^Screen) {
+	if !s.in_alt_screen && s.scroll_top == 0 {
+		line := make([]rune, s.width)
+		copy(line, s.grid[0:s.width])
+		append(&s.scrollback, line)
+		s.total_lines_scrolled += 1
+
+		if len(s.scrollback) > MAX_SCROLLBACK {
+			delete(s.scrollback[0])
+			ordered_remove(&s.scrollback, 0)
+		}
+	}
+}
+
+
 handle_scrolling :: proc(s: ^Screen) {
-	limit := s.scroll_bottom > 0 ? s.scroll_bottom : s.height - 2
+	limit: int
+	if s.scroll_bottom > 0 && s.scroll_bottom < s.height - 1 {
+		limit = s.scroll_bottom
+	} else {
+		limit = s.height - 2
+	}
+
 	if s.cursor_y > limit {
 		s.cursor_y = limit
 
+		handle_scrollback(s)
 		grid := s.in_alt_screen ? s.alt_grid : s.grid
 
 		// Shift within the region
 		dst_start := s.scroll_top * s.width
 		src_start := (s.scroll_top + 1) * s.width
-		len_bytes := (s.scroll_bottom - s.scroll_top) * s.width
+		len_bytes := (limit - s.scroll_top) * s.width
 
 		copy(grid[dst_start:], grid[src_start:src_start + len_bytes])
 
 		// Clear only the bottom row of the scrolling region
-		clear_start := s.scroll_bottom * s.width
+		clear_start := limit * s.width
 		for i in 0 ..< s.width {grid[clear_start + i] = 0}
 
-		for i in s.scroll_top ..= s.scroll_bottom {s.dirty[i] = true}
+		for i in s.scroll_top ..= limit {s.dirty[i] = true}
 	}
 }
 

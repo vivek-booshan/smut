@@ -204,7 +204,7 @@ handle_erase_in_display :: proc(s: ^Screen, mode: int) {
 		// Clear current line from cursor
 		handle_erase_in_line(s, 0)
 		// Clear all lines below
-		for y in s.cursor_y + 1 ..< s.height {
+		for y in s.cursor_y + 1 ..< s.height - 1 {
 			for x in 0 ..< s.width {grid[y * s.width + x] = rune(0)}
 			s.dirty[y] = true
 		}
