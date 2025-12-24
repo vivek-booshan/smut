@@ -11,6 +11,8 @@ SELECT :: 's'
 MOVE_DOWN :: 'j'
 MOVE_UP :: 'k'
 MOVE_LEFT :: 'h'
+HALF_PAGE_UP :: 21 // ctrl u
+HALF_PAGE_DOWN :: 4 // ctrl d
 MOVE_RIGHT :: 'l'
 EXTEND_LINE_BELOW :: 'x'
 EXTEND_LINE :: 'x'
@@ -73,6 +75,7 @@ handle_switch_inputs :: proc(b: u8) -> bool {
 
 handle_motion_inputs :: proc(b: u8, count: int) -> bool {
 	ok := true
+	half_page := max(1, (screen.height - 1) / 2)
 
 	switch b {
 	case '0' ..= '9':
@@ -90,6 +93,20 @@ handle_motion_inputs :: proc(b: u8, count: int) -> bool {
 		} else {
 			// scroll up into dead view
 			screen.scroll_offset = min(len(screen.scrollback), screen.scroll_offset + count)
+		}
+	case HALF_PAGE_DOWN:
+		total_move := half_page * count
+		if screen.cursor_y < screen.pty_cursor_y {
+			screen.cursor_y = min(screen.pty_cursor_y, screen.cursor_y + total_move)
+		} else {
+			screen.scroll_offset = max(0, screen.scroll_offset - total_move)
+		}
+	case HALF_PAGE_UP:
+		total_move := half_page * count
+		if screen.cursor_y > 0 {
+			screen.cursor_y = max(0, screen.cursor_y - total_move)
+		} else {
+			screen.scroll_offset = min(len(screen.scrollback), screen.scroll_offset + total_move)
 		}
 	case MOVE_LEFT:
 		screen.cursor_x = max(0, screen.cursor_x - count)

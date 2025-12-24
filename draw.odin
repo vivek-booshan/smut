@@ -293,7 +293,7 @@ get_row_data :: proc(abs_line: int) -> (row_data: []rune, is_history: bool) {
 
 	if abs_line <= screen.total_lines_scrolled {
 		idx := abs_line - history_start
-		if idx > 0 && idx < len(screen.scrollback) {
+		if idx >= 0 && idx < len(screen.scrollback) {
 			row_data = screen.scrollback[idx]
 			is_history = true
 		}
