@@ -232,8 +232,8 @@ handle_csi_sequence :: proc(s: ^Screen, final: u8) {
 
 MAX_SCROLLBACK :: 1000
 handle_scrolling :: proc(s: ^Screen) {
-	if s.cursor_y >= s.height {
-		s.cursor_y = s.height - 1
+	if s.cursor_y >= s.height - 1 {
+		s.cursor_y = s.height - 2
 
 		// 1. Capture the top row before shifting
 		line := make([]u8, s.width)
@@ -285,13 +285,13 @@ draw_gutter :: proc(b: ^strings.Builder, y, abs_line, pty_cursor_y: int, is_hist
 
 	if is_history || (grid_y_live >= 0 && grid_y_live <= pty_cursor_y) {
 		if y == screen.cursor_y {
-			fmt.sbprintf(b, "\x1b[33m%3d \x1b[0m", abs_line)
+			fmt.sbprintf(b, "\x1b[33;49m%3d \x1b[0m", abs_line)
 		} else {
 			rel_num := abs(y - screen.cursor_y)
-			fmt.sbprintf(b, "\x1b[90m%3d \x1b[0m", rel_num)
+			fmt.sbprintf(b, "\x1b[90;49m%3d \x1b[0m", rel_num)
 		}
 	} else {
-		fmt.sbprintf(b, "%*s", GUTTER_W, "")
+		fmt.sbprintf(b, "\x1b[49m%*s", GUTTER_W, "")
 	}
 }
 
@@ -303,7 +303,7 @@ draw_screen :: proc() {
 	term_view_w := max(1, screen.width - GUTTER_W)
 
 	history_len := len(screen.scrollback)
-	for y in 0 ..< screen.height {
+	for y in 0 ..< screen.height - 1 {
 		// Calculate the absolute row index including history
 		// Normal view (offset 0) ends at history_len + grid_y
 		row_idx := history_len - screen.scroll_offset + y
@@ -337,6 +337,7 @@ draw_screen :: proc() {
 	}
 
 	draw_status_bar(&b)
+	fmt.sbprint(&b, "\x1b[0m") // reset
 	fmt.print(strings.to_string(b))
 }
 
@@ -352,8 +353,9 @@ draw_status_bar :: proc(b: ^strings.Builder) {
 	} else {
 		fmt.sbprint(b, mode_name)
 	}
-
 }
+
+
 draw_grid :: proc(
 	b: ^strings.Builder,
 	y: int,
