@@ -13,6 +13,23 @@ Key :: enum u8 {
 	ESCAPE    = 27,
 	DELETE    = 127,
 }
+
+AnsiState :: enum {
+	Ground,
+	Escape, // After ESC
+	CSI, // After ESC [
+	STR, // After ESC ] (OSC), ESC P (DCS), ESC ^ (PM), ESC _ (APC)
+	Charset, // After ESC ( or ESC )
+	Esc_Test, // After ESC #
+}
+
+Mode :: enum {
+	Insert,
+	Motion,
+	Select,
+	Switch,
+}
+
 Screen :: struct {
 	grid:                 [dynamic]u8,
 	dirty:                [dynamic]bool,
@@ -21,11 +38,7 @@ Screen :: struct {
 	cursor_x:             int,
 	cursor_y:             int,
 	pty_cursor_y:         int,
-	mode:                 enum {
-		Insert,
-		Normal,
-		Command,
-	},
+	mode:                 Mode,
 
 	// Selection state
 	selection_start_y:    int,
@@ -41,13 +54,14 @@ Screen :: struct {
 	total_lines_scrolled: int,
 
 	// ANSI State Machine
-	ansi_state:           enum {
-		Ground,
-		Escape,
-		Bracket,
-	},
-	ansi_buf:             [32]u8,
+	ansi_state:           AnsiState,
+	ansi_buf:             [64]u8,
 	ansi_idx:             int,
+
+	// String Buffer for OSC/DCS Sequences
+	str_buf:              [256]u8,
+	str_idx:              int,
+	str_type:             u8,
 
 	// ALTERNATE SCREEN BUFFER
 	in_alt_screen:        bool,

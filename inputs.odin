@@ -3,17 +3,19 @@ package smut
 import "core:strconv"
 import "core:sys/posix"
 
+INSERT :: 'i'
+MOTION :: 'm'
+SELECT :: 's'
 
-Action :: enum u8 {
-	MOVE_DOWN         = 'j',
-	MOVE_UP           = 'k',
-	MOVE_LEFT         = 'h',
-	MOVE_RIGHT        = 'l',
-	EXTEND_LINE_BELOW = 'x',
-	EXTEND_LINE       = 'x',
-	EXTEND_LINE_ABOVE = 'X',
-	GOTO              = 'g',
-}
+MOVE_DOWN :: 'j'
+MOVE_UP :: 'k'
+MOVE_LEFT :: 'h'
+MOVE_RIGHT :: 'l'
+EXTEND_LINE_BELOW :: 'x'
+EXTEND_LINE :: 'x'
+EXTEND_LINE_ABOVE :: 'X'
+YANK :: 'y'
+GOTO :: 'g'
 
 GotoAction :: enum u8 {
 	LINE_START = 's',
@@ -47,31 +49,51 @@ command_multiplier :: proc() -> int {
 
 }
 
-handle_normal_command :: proc(b: u8, count: int) -> bool {
-	cmd_executed := true
+handle_switch_inputs :: proc(b: u8) -> bool {
+	ok := true
+
+	switch b {
+	case INSERT:
+		screen.mode = .Insert
+		screen.scroll_offset = 0
+		screen.cursor_y = screen.pty_cursor_y
+		screen.is_selecting = false
+		screen.cmd_idx = 0 // Clear keys on mode switch
+	case MOTION:
+		screen.mode = .Motion
+	case SELECT:
+		screen.mode = .Select
+	case:
+		ok = false
+	}
+	return ok
+}
+
+handle_motion_inputs :: proc(b: u8, count: int) -> bool {
+	ok := true
 
 	switch b {
 	case '0' ..= '9':
-		cmd_executed = false // Don't clear buffer yet, we are still typing a number
-	case 'j':
+		return true
+	case MOVE_DOWN:
 		if screen.cursor_y < screen.pty_cursor_y {
 			screen.cursor_y = min(screen.pty_cursor_y, screen.cursor_y + count)
 		} else {
 			// scroll down towards live view
 			screen.scroll_offset = max(0, screen.scroll_offset - count)
 		}
-	case 'k':
+	case MOVE_UP:
 		if screen.cursor_y > 0 {
 			screen.cursor_y -= count
 		} else {
 			// scroll up into dead view
 			screen.scroll_offset = min(len(screen.scrollback), screen.scroll_offset + count)
 		}
-	case 'h':
+	case MOVE_LEFT:
 		screen.cursor_x = max(0, screen.cursor_x - count)
-	case 'l':
+	case MOVE_RIGHT:
 		screen.cursor_x = min(screen.width - 1, screen.cursor_x + count)
-	case 'x':
+	case EXTEND_LINE_BELOW:
 		if !screen.is_selecting {
 			screen.selection_start_y = screen.cursor_y
 		}
@@ -80,7 +102,7 @@ handle_normal_command :: proc(b: u8, count: int) -> bool {
 		}
 		screen.is_selecting = true
 
-	case 'X':
+	case EXTEND_LINE_ABOVE:
 		if !screen.is_selecting {
 			screen.selection_start_y = screen.cursor_y
 		}
@@ -88,61 +110,58 @@ handle_normal_command :: proc(b: u8, count: int) -> bool {
 			screen.cursor_y = max(0, screen.cursor_y - count)
 		}
 		screen.is_selecting = true
-	case 'y':
+	case YANK:
 		if screen.is_selecting {
 			yank_selection(&screen)
 		}
 	case 'G':
 		screen.scroll_offset = 0
 		screen.cursor_y = screen.pty_cursor_y
-	case 'i':
-		screen.mode = .Insert
-		screen.scroll_offset = 0
-		screen.cursor_y = screen.pty_cursor_y
-		screen.is_selecting = false
-		screen.cmd_idx = 0 // Clear keys on mode switch
-		cmd_executed = false
 	case 27:
 		// ESC
 		screen.is_selecting = false
-		screen.is_selecting = false
 	case:
-		// If it's an unrecognized key, we don't treat it as a command
-		cmd_executed = false
+		ok = false
 	}
 
-	// If a command was finished (like 'j'), clear the keystroke buffer
-	if cmd_executed {
+	if ok {
 		screen.cmd_idx = 0
 	}
-
-	return cmd_executed
-
+	return ok
 }
+
+handle_select_inputs :: handle_motion_inputs
 
 handle_input :: proc(input: []u8, master_fd: posix.FD) {
 	for &b in input {
 		// Mode: NORMAL
-		if screen.mode == .Normal {
-			// 1. Enter Insert Mode
+		k := Key(b)
+		if k == .CTRLB {
+			screen.mode = .Switch
+			screen.cmd_idx = 0
+			continue
+		}
 
+		if screen.mode == .Switch {
 			// 2. Buffer the keystroke for the status bar
 			status_bar_keystroke_buffer(b)
-
-			// 3. Extract the numeric multiplier (if any)
-			// We look at the buffer and find the digits at the start
+			handle_switch_inputs(b)
+			continue
+		}
+		if screen.mode == .Motion || screen.mode == .Select {
+			status_bar_keystroke_buffer(b)
 			count := command_multiplier()
+			if handle_motion_inputs(b, count) {
+				continue
+			}
+		}
 
-			// 4. Command Execution (Triggered by the last byte 'b')
-			handle_normal_command(b, count)
+		if b == 27 {
+			screen.mode = .Motion
+			screen.cmd_idx = 0
 			continue
 		}
 
-		// Mode: INSERT
-		if b == 27 { 	// ESC returns to Normal Mode
-			screen.mode = .Normal
-			continue
-		}
 		posix.write(master_fd, &b, 1)
 	}
 }

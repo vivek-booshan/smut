@@ -44,96 +44,82 @@ resize_screen :: proc(s: ^Screen, pty_fd: posix.FD) {
 	set_window_size(pty_fd, term_w, s.height - 1)
 }
 
+// smut/draw.odin
+
 process_output :: proc(s: ^Screen, data: []u8) {
-	term_view_w := max(1, s.width - GUTTER_W)
 	current_w := s.in_alt_screen ? s.width : (s.width - GUTTER_W)
+
 	for b in data {
-		switch s.ansi_state {
-		case .Ground:
+		// Handle global control characters first (C0 set)
+		if b < 32 {
 			switch b {
-			case 8, 127:
-				// backspace / delete
-				if s.cursor_x > 0 {
-					s.cursor_x -= 1
-
-					idx := (s.cursor_y * s.width) + s.cursor_x
-					if idx < len(s.grid) {
-						s.grid[idx] = 0
-					}
-
-					if s.cursor_y < len(s.dirty) {
-						s.dirty[s.cursor_y] = true
-					}
-				}
 			case 0x1b:
 				// ESC
 				s.ansi_state = .Escape
 				s.ansi_idx = 0
-			case '\t':
-				s.cursor_x = (s.cursor_x + 8) & ~int(7)
-				if s.cursor_x >= current_w do s.cursor_x = current_w - 1
-				if s.cursor_y < len(s.dirty) do s.dirty[s.cursor_y] = true
-
-			case '\n':
-				s.cursor_y += 1
-				handle_scrolling(s)
-				s.pty_cursor_y = s.cursor_y
-				if s.cursor_y < len(s.dirty) {s.dirty[s.cursor_y] = true}
-
-			case '\r':
-				s.cursor_x = 0
-
-			case:
-				if b >= 32 {
-					idx := (s.cursor_y * s.width) + s.cursor_x
-
-					if s.in_alt_screen {
-						if idx < len(s.alt_grid) do s.alt_grid[idx] = b
-					} else {
-						if idx < len(s.grid) do s.grid[idx] = b
-					}
-
-					s.cursor_x += 1
-					if s.cursor_x >= term_view_w {
-						s.cursor_x = 0
-						s.cursor_y = min(s.cursor_y + 1, s.height - 1)
-					}
-					if s.cursor_y < len(s.dirty) do s.dirty[s.cursor_y] = true
-					s.pty_cursor_y = s.cursor_y
+				continue
+			case 0x07:
+				// BEL (terminates some STR sequences)
+				if s.ansi_state == .STR {
+					handle_str_sequence(s)
+					s.ansi_state = .Ground
 				}
-			// if b >= 32 {
-			// 	if s.cursor_x >= term_view_w {
-			// 		s.cursor_x = 0
-			// 		s.cursor_y += 1
-			// 		handle_scrolling(s)
-			// 	}
-
-			// 	idx := (s.cursor_y * s.width) + s.cursor_x
-			// 	if idx < len(s.grid) {
-			// 		s.grid[idx] = b
-			// 		s.cursor_x += 1
-			// 		// MARK DIRTY: This line has changed
-			// 		if s.cursor_y < len(s.dirty) {s.dirty[s.cursor_y] = true}
-			// 	}
-			// 	s.pty_cursor_y = s.cursor_y
-			// }
+				continue
+			case '\t', '\n', '\r', 8, 127:
+				// These are handled in Ground, but if we get them during a sequence,
+				// st typically executes them and remains in the sequence state.
+				if s.ansi_state == .Ground {
+					handle_control_char(s, b, current_w)
+					continue
+				}
 			}
+		}
+
+		switch s.ansi_state {
+		case .Ground:
+			write_char_to_grid(s, b, current_w)
 
 		case .Escape:
-			if b == '[' {
-				s.ansi_state = .Bracket
-			} else {
-				s.ansi_state = .Ground // Unsupported sequence
+			switch b {
+			case '[':
+				s.ansi_state = .CSI
+			case ']', 'P', '^', '_':
+				s.ansi_state = .STR
+				s.str_type = b
+				s.str_idx = 0
+			case '(', ')':
+				s.ansi_state = .Charset
+			case '#':
+				s.ansi_state = .Esc_Test
+			case:
+				// Handle single-char ESC sequences (e.g., ESC D, ESC M)
+				handle_esc_char(s, b)
+				s.ansi_state = .Ground
 			}
 
-		case .Bracket:
-			if b >= 0x40 && b <= 0x7E { 	// Final character of CSI sequence
+		case .CSI:
+			// Collect params and intermediates
+			if b >= 0x40 && b <= 0x7E {
 				handle_csi_sequence(s, b)
 				s.ansi_state = .Ground
 			} else if s.ansi_idx < len(s.ansi_buf) - 1 {
 				s.ansi_buf[s.ansi_idx] = b
 				s.ansi_idx += 1
 			}
+
+		case .STR:
+			// String sequences end with ST (ESC \) or BEL (0x07)
+			if b == 0x1b {
+				// Potential ST transition (ESC \)
+				// For simplicity, handle_str_sequence can look for ST
+			} else if s.str_idx < len(s.str_buf) - 1 {
+				s.str_buf[s.str_idx] = b
+				s.str_idx += 1
+			}
+
+		case .Charset, .Esc_Test:
+			// Finalize these one-char state extensions
+			s.ansi_state = .Ground
 		}
 	}
 }
@@ -227,6 +213,73 @@ handle_csi_sequence :: proc(s: ^Screen, final: u8) {
 		// We ignore colors for now to keep the grid as u8,
 		// but capturing 'm' prevents it from printing to screen.
 		return
+	}
+}
+
+// smut/draw.odin
+
+handle_control_char :: proc(s: ^Screen, b: u8, current_w: int) {
+	switch b {
+	case 8, 127:
+		// Backspace
+		if s.cursor_x > 0 {
+			s.cursor_x -= 1
+			idx := (s.cursor_y * s.width) + s.cursor_x
+			target := s.in_alt_screen ? &s.alt_grid : &s.grid
+			if idx < len(target) do target[idx] = 0
+			if s.cursor_y < len(s.dirty) do s.dirty[s.cursor_y] = true
+		}
+	case '\t':
+		s.cursor_x = (s.cursor_x + 8) & ~int(7)
+		if s.cursor_x >= current_w do s.cursor_x = current_w - 1
+		if s.cursor_y < len(s.dirty) do s.dirty[s.cursor_y] = true
+	case '\n':
+		s.cursor_y += 1
+		handle_scrolling(s)
+		s.pty_cursor_y = s.cursor_y
+		if s.cursor_y < len(s.dirty) do s.dirty[s.cursor_y] = true
+	case '\r':
+		s.cursor_x = 0
+	}
+}
+
+write_char_to_grid :: proc(s: ^Screen, b: u8, current_w: int) {
+	if b < 32 do return
+
+	idx := (s.cursor_y * s.width) + s.cursor_x
+	if s.in_alt_screen {
+		if idx < len(s.alt_grid) do s.alt_grid[idx] = b
+	} else {
+		if idx < len(s.grid) do s.grid[idx] = b
+	}
+
+	s.cursor_x += 1
+	if s.cursor_x >= current_w {
+		s.cursor_x = 0
+		s.cursor_y = min(s.cursor_y + 1, s.height - 1)
+	}
+	if s.cursor_y < len(s.dirty) do s.dirty[s.cursor_y] = true
+	s.pty_cursor_y = s.cursor_y
+}
+
+handle_str_sequence :: proc(s: ^Screen) {
+	// OSC (type ']') is common for titles. 
+	// Format: \e]0;TITLE\x07
+	if s.str_type == ']' {
+		// Log or handle window title changes here
+	}
+}
+
+handle_esc_char :: proc(s: ^Screen, b: u8) {
+	switch b {
+	case 'D':
+		// Index (Line Feed)
+		handle_control_char(s, '\n', s.width)
+	case 'M':
+		// Reverse Index (Move cursor up)
+		s.cursor_y = max(0, s.cursor_y - 1)
+	case 'c': // RIS (Reset to Initial State)
+	// Clear screen, reset modes
 	}
 }
 
@@ -342,10 +395,20 @@ draw_screen :: proc() {
 }
 
 draw_status_bar :: proc(b: ^strings.Builder) {
-	// 3. Status Bar
-	// (Add scroll info if offset > 0)
-	mode_color := screen.mode == .Normal ? "\x1b[30;42m" : "\x1b[30;44m"
-	mode_name := screen.mode == .Normal ? " NORMAL " : " INSERT "
+	mode_color: string
+	mode_name: string
+
+	switch screen.mode {
+	case .Insert:
+		mode_color, mode_name = "\x1b[30;44m", " INSERT " // Blue
+	case .Motion:
+		mode_color, mode_name = "\x1b[30;42m", " Motion " // Green
+	case .Switch:
+		mode_color, mode_name = "\x1b[30;43m", " Switch " // Yellow (Leader Active)
+	case .Select:
+		mode_color, mode_name = "\x1b[30;45m", " SELECT "
+	}
+
 
 	fmt.sbprint(b, mode_color)
 	if screen.scroll_offset > 0 {
@@ -353,6 +416,8 @@ draw_status_bar :: proc(b: ^strings.Builder) {
 	} else {
 		fmt.sbprint(b, mode_name)
 	}
+
+	fmt.sbprint(b, "\x1b[K")
 }
 
 
@@ -369,7 +434,7 @@ draw_grid :: proc(
 		is_cursor := (x == screen.cursor_x && y == screen.cursor_y)
 
 		if is_cursor {
-			fmt.sbprint(b, "\x1b[7m")
+			fmt.sbprint(b, "\x1b[7m") // inverse color
 		} else if is_in_selection {
 			fmt.sbprint(b, "\x1b[48;5;239m")
 		}
