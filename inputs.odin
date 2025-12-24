@@ -4,7 +4,7 @@ import "core:strconv"
 import "core:sys/posix"
 
 INSERT :: 'i'
-MOTION :: 'm'
+MOTION :: 'n'
 SELECT :: 's'
 
 MOVE_DOWN :: 'j'
@@ -56,6 +56,7 @@ handle_switch_inputs :: proc(b: u8) -> bool {
 	case INSERT:
 		screen.mode = .Insert
 		screen.scroll_offset = 0
+		screen.cursor_x = screen.pty_cursor_x
 		screen.cursor_y = screen.pty_cursor_y
 		screen.is_selecting = false
 		screen.cmd_idx = 0 // Clear keys on mode switch
@@ -113,9 +114,14 @@ handle_motion_inputs :: proc(b: u8, count: int) -> bool {
 	case YANK:
 		if screen.is_selecting {
 			yank_selection(&screen)
+			// screen.cursor_x = screen.pty_cursor_x
+			// screen.cursor_y = screen.pty_cursor_y
+			// screen.mode = .Insert
+			screen.is_selecting = false
 		}
 	case 'G':
 		screen.scroll_offset = 0
+		screen.cursor_x = screen.pty_cursor_x
 		screen.cursor_y = screen.pty_cursor_y
 	case 27:
 		// ESC
@@ -133,6 +139,13 @@ handle_motion_inputs :: proc(b: u8, count: int) -> bool {
 handle_select_inputs :: handle_motion_inputs
 
 handle_input :: proc(input: []u8, master_fd: posix.FD) {
+
+	if len(input) > 5 && (screen.mode != .Insert) {
+		screen.mode = .Insert
+		screen.scroll_offset = 0
+		screen.cursor_x = screen.pty_cursor_x
+		screen.cursor_y = screen.pty_cursor_y
+	}
 	for &b in input {
 		// Mode: NORMAL
 		k := Key(b)

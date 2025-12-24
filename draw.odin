@@ -6,12 +6,50 @@ import "core:strings"
 import "core:sys/darwin"
 import "core:sys/posix"
 
+// resize_screen :: proc(s: ^Screen, pty_fd: posix.FD) {
+// 	ws: struct {
+// 		r, c, x, y: u16,
+// 	}
+
+// 	// Get Host Terminal Size using STDOUT 
+// 	if darwin.syscall_ioctl(posix.STDOUT_FILENO, darwin.TIOCGWINSZ, &ws) != -1 && ws.r > 0 {
+// 		s.width = int(ws.c)
+// 		s.height = int(ws.r)
+// 	} else {
+// 		s.width, s.height = 80, 24
+// 	}
+
+// 	total_cells := s.width * s.height
+// 	if len(s.grid) != total_cells || len(s.dirty) != s.height {
+// 		delete(s.grid)
+// 		s.grid = make([dynamic]u8, total_cells)
+
+// 		delete(s.dirty)
+// 		s.dirty = make([dynamic]bool, s.height)
+// 		for i in 0 ..< s.height {s.dirty[i] = true}
+// 		s.cursor_x = clamp(s.cursor_x, 0, max(0, s.width - GUTTER_W - 1))
+// 		s.cursor_y = clamp(s.cursor_y, 0, max(0, s.height - 1))
+
+// 		if len(s.alt_grid) > 0 do delete(s.alt_grid)
+// 		s.alt_grid = make([dynamic]u8, total_cells)
+// 		for i in 0 ..< total_cells {
+// 			s.alt_grid[i] = 0
+// 		}
+// 		// if s.cursor_x >= s.width - GUTTER_W {s.cursor_x = max(0, (s.width - GUTTER_W) - 1)}
+// 		// if s.cursor_y >= s.height {s.cursor_y = max(0, s.height - 1)}
+// 	}
+
+// 	// Update child process of new size minus gutter [cite: 9]
+// 	term_w := max(1, s.width - GUTTER_W)
+// 	set_window_size(pty_fd, term_w, s.height - 1)
+// }
 resize_screen :: proc(s: ^Screen, pty_fd: posix.FD) {
 	ws: struct {
 		r, c, x, y: u16,
 	}
 
-	// Get Host Terminal Size using STDOUT 
+	old_w, old_h := s.width, s.height
+
 	if darwin.syscall_ioctl(posix.STDOUT_FILENO, darwin.TIOCGWINSZ, &ws) != -1 && ws.r > 0 {
 		s.width = int(ws.c)
 		s.height = int(ws.r)
@@ -19,32 +57,55 @@ resize_screen :: proc(s: ^Screen, pty_fd: posix.FD) {
 		s.width, s.height = 80, 24
 	}
 
-	total_cells := s.width * s.height
-	if len(s.grid) != total_cells || len(s.dirty) != s.height {
-		delete(s.grid)
-		s.grid = make([dynamic]u8, total_cells)
+	// 3. Only reallocate if the dimensions actually changed
+	if old_w != s.width || old_h != s.height || len(s.grid) == 0 {
+		total_cells := s.width * s.height
 
-		delete(s.dirty)
-		s.dirty = make([dynamic]bool, s.height)
-		for i in 0 ..< s.height {s.dirty[i] = true}
-		s.cursor_x = clamp(s.cursor_x, 0, max(0, s.width - GUTTER_W - 1))
-		s.cursor_y = clamp(s.cursor_y, 0, max(0, s.height - 1))
+		// Prepare new buffers
+		new_grid := make([dynamic]u8, total_cells)
+		new_alt_grid := make([dynamic]u8, total_cells)
+		new_dirty := make([dynamic]bool, s.height)
 
-		if len(s.alt_grid) > 0 do delete(s.alt_grid)
-		s.alt_grid = make([dynamic]u8, total_cells)
-		for i in 0 ..< total_cells {
-			s.alt_grid[i] = 0
+		// 4. PRESERVATION LOGIC: Copy old data into the new grid
+		// We copy row-by-row to handle width changes correctly
+		if len(s.grid) > 0 {
+			min_h := min(old_h, s.height)
+			min_w := min(old_w, s.width)
+
+			for y in 0 ..< min_h {
+				old_start := y * old_w
+				new_start := y * s.width
+
+				copy(new_grid[new_start:new_start + min_w], s.grid[old_start:old_start + min_w])
+				copy(
+					new_alt_grid[new_start:new_start + min_w],
+					s.alt_grid[old_start:old_start + min_w],
+				)
+			}
 		}
-		// if s.cursor_x >= s.width - GUTTER_W {s.cursor_x = max(0, (s.width - GUTTER_W) - 1)}
-		// if s.cursor_y >= s.height {s.cursor_y = max(0, s.height - 1)}
+
+		delete(s.grid)
+		delete(s.alt_grid)
+		delete(s.dirty)
+
+		s.grid = new_grid
+		s.alt_grid = new_alt_grid
+		s.dirty = new_dirty
+
+		// 6. Clamp cursor positions to ensure they stay within the new bounds
+		// Note: cursor_y is clamped to height-2 to reserve height-1 for the status bar
+		s.cursor_x = clamp(s.cursor_x, 0, max(0, s.width - GUTTER_W - 1))
+		s.cursor_y = clamp(s.cursor_y, 0, max(0, s.height - 2))
 	}
 
-	// Update child process of new size minus gutter [cite: 9]
+	// This is critical to prevent the screen from "disappearing" on resize
+	for i in 0 ..< s.height {
+		if i < len(s.dirty) do s.dirty[i] = true
+	}
+
 	term_w := max(1, s.width - GUTTER_W)
 	set_window_size(pty_fd, term_w, s.height - 1)
 }
-
-// smut/draw.odin
 
 process_output :: proc(s: ^Screen, data: []u8) {
 	current_w := s.in_alt_screen ? s.width : (s.width - GUTTER_W)
@@ -229,10 +290,12 @@ handle_control_char :: proc(s: ^Screen, b: u8, current_w: int) {
 			if idx < len(target) do target[idx] = 0
 			if s.cursor_y < len(s.dirty) do s.dirty[s.cursor_y] = true
 		}
+		s.pty_cursor_x = s.cursor_x
 	case '\t':
 		s.cursor_x = (s.cursor_x + 8) & ~int(7)
 		if s.cursor_x >= current_w do s.cursor_x = current_w - 1
 		if s.cursor_y < len(s.dirty) do s.dirty[s.cursor_y] = true
+		s.pty_cursor_x = s.cursor_x
 	case '\n':
 		s.cursor_y += 1
 		handle_scrolling(s)
@@ -240,6 +303,7 @@ handle_control_char :: proc(s: ^Screen, b: u8, current_w: int) {
 		if s.cursor_y < len(s.dirty) do s.dirty[s.cursor_y] = true
 	case '\r':
 		s.cursor_x = 0
+		s.pty_cursor_x = 0
 	}
 }
 
@@ -259,6 +323,7 @@ write_char_to_grid :: proc(s: ^Screen, b: u8, current_w: int) {
 		s.cursor_y = min(s.cursor_y + 1, s.height - 1)
 	}
 	if s.cursor_y < len(s.dirty) do s.dirty[s.cursor_y] = true
+	s.pty_cursor_x = s.cursor_x
 	s.pty_cursor_y = s.cursor_y
 }
 
@@ -402,9 +467,9 @@ draw_status_bar :: proc(b: ^strings.Builder) {
 	case .Insert:
 		mode_color, mode_name = "\x1b[30;44m", " INSERT " // Blue
 	case .Motion:
-		mode_color, mode_name = "\x1b[30;42m", " Motion " // Green
+		mode_color, mode_name = "\x1b[30;42m", " MOTION " // Green
 	case .Switch:
-		mode_color, mode_name = "\x1b[30;43m", " Switch " // Yellow (Leader Active)
+		mode_color, mode_name = "\x1b[30;43m", " SWITCH " // Yellow (Leader Active)
 	case .Select:
 		mode_color, mode_name = "\x1b[30;45m", " SELECT "
 	}
