@@ -77,6 +77,18 @@ handle_csi_sequence :: proc(s: ^Screen, b: u8) {
 		// EL - Erase in Line
 		mode := p_idx > 0 ? params[0] : 0
 		handle_erase_in_line(s, mode)
+	case 'h':
+		// DEC Private Mode Set
+		if params[0] == 1049 {
+			s.in_alt_screen = true
+			for i in 0 ..< s.height {s.dirty[i] = true}
+		}
+	case 'l':
+		// DEC Private Mode Reset
+		if params[0] == 1049 {
+			s.in_alt_screen = false
+			for i in 0 ..< s.height {s.dirty[i] = true}
+		}
 
 	case 'm': // SGR - Select Graphic Rendition
 	// This handles colors. For now, we ignore or pass through.
@@ -119,7 +131,8 @@ handle_erase_in_display :: proc(s: ^Screen, mode: int) {
 		}
 	case 2:
 		// Clear whole screen
-		for i in 0 ..< len(s.grid) {s.grid[i] = 0}
+		grid := s.in_alt_screen ? s.alt_grid : s.grid
+		for i in 0 ..< len(grid) {grid[i] = 0}
 		for i in 0 ..< s.height {s.dirty[i] = true}
 	}
 }
