@@ -338,10 +338,12 @@ handle_control_char :: proc(s: ^Screen, b: rune, current_w: int) {
 		// Backspace
 		if s.cursor_x > 0 {
 			s.cursor_x -= 1
-			idx := (s.cursor_y * s.width) + s.cursor_x
-			target := s.in_alt_screen ? s.alt_grid : s.grid
-			if idx < len(target) do target[idx] = 0
-			if s.cursor_y < len(s.dirty) do s.dirty[s.cursor_y] = true
+			// let shell handle deletion vs left arrow
+			// idx := (s.cursor_y * s.width) + s.cursor_x
+			// target := s.in_alt_screen ? s.alt_grid : s.grid
+			// if idx < len(target) do target[idx] = 0
+			// if s.cursor_y < len(s.dirty) do s.dirty[s.cursor_y] = true
+			s.dirty[s.cursor_y] = true
 		}
 		s.pty_cursor_x = s.cursor_x
 	case '\t':
