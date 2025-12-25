@@ -27,8 +27,8 @@ resize_screen :: proc(s: ^Screen, pty_fd: posix.FD) {
 		total_cells := s.width * s.height
 
 		// Prepare new buffers
-		new_grid := make([dynamic]rune, total_cells)
-		new_alt_grid := make([dynamic]rune, total_cells)
+		new_grid := make([dynamic]Glyph, total_cells)
+		new_alt_grid := make([dynamic]Glyph, total_cells)
 		new_dirty := make([dynamic]bool, s.height)
 
 		// 4. PRESERVATION LOGIC: Copy old data into the new grid
@@ -191,18 +191,24 @@ handle_ansi_byte :: proc(s: ^Screen, b: byte) {
 write_rune_to_grid :: proc(s: ^Screen, b: rune, current_w: int) {
 	if b < CONTROL_CODES do return
 
+	VIEW_LIMIT := s.height - 2
 	if s.cursor_x >= current_w {
 		s.cursor_x = 0
-		// s.cursor_y += 1
-		s.cursor_y = min(s.cursor_y + 1, s.height - 2)
+		s.cursor_y += 1
+		// s.cursor_y = min(s.cursor_y + 1, s.height - 2)
 		handle_scrolling(s)
 	}
 
+	if s.cursor_y > VIEW_LIMIT {
+		s.cursor_y = VIEW_LIMIT
+		handle_scrolling(s)
+	}
 	idx := (s.cursor_y * s.width) + s.cursor_x
 	grid := s.in_alt_screen ? s.alt_grid : s.grid
 
 	if idx < len(grid) {
-		grid[idx] = b
+		grid[idx] = s.current_attr
+		grid[idx].char = b
 		s.dirty[s.cursor_y] = true
 	}
 
@@ -236,7 +242,7 @@ handle_esc_char :: proc(s: ^Screen, b: u8) {
 
 handle_scrollback :: proc(s: ^Screen) {
 	if !s.in_alt_screen && s.scroll_top == 0 {
-		line := make([]rune, s.width)
+		line := make([]Glyph, s.width)
 		copy(line, s.grid[0:s.width])
 		append(&s.scrollback, line)
 		s.total_lines_scrolled += 1
@@ -276,13 +282,13 @@ handle_scrolling :: proc(s: ^Screen) {
 
 		// Clear only the bottom row of the scrolling region
 		clear_start := limit * s.width
-		for i in 0 ..< s.width {grid[clear_start + i] = 0}
+		for i in 0 ..< s.width {grid[clear_start + i] = blank_glyph(s)}
 
 		for i in s.scroll_top ..= limit {s.dirty[i] = true}
 	}
 }
 
-get_row_data :: proc(abs_line: int) -> (row_data: []rune, is_history: bool) {
+get_row_data :: proc(abs_line: int) -> (row_data: []Glyph, is_history: bool) {
 
 	is_history = false
 	history_start := max(1, screen.total_lines_scrolled - len(screen.scrollback) + 1)
@@ -377,7 +383,7 @@ draw_screen :: proc() {
 		row_idx := history_len - screen.scroll_offset + y
 		abs_line := (screen.total_lines_scrolled + y + 1) - screen.scroll_offset
 
-		row_data: []rune
+		row_data: []Glyph
 		is_history := false
 		if screen.in_alt_screen {
 			start := y * screen.width
@@ -435,31 +441,63 @@ draw_status_bar :: proc(b: ^strings.Builder) {
 	fmt.sbprint(b, "\x1b[K")
 }
 
-
 draw_grid :: proc(
 	b: ^strings.Builder,
 	y: int,
-	row_data: []rune,
+	row_data: []Glyph,
 	view_w: int,
 	is_in_selection: bool,
 ) {
+	curr_fg, curr_bg: u32 = 0xFFFFFFFF, 0xFFFFFFFF
+	curr_mode: GlyphMode = {}
+
 	for x in 0 ..< view_w {
-		char := row_data[x]
-		// Only draw cursor if we are in the active grid view (not history)
+		glyph := row_data[x]
 		is_cursor := (x == screen.cursor_x && y == screen.cursor_y)
-
-		if is_cursor {
-			fmt.sbprint(b, "\x1b[7m") // inverse color
-		} else if is_in_selection {
-			fmt.sbprint(b, "\x1b[48;5;239m")
-		}
-
-		fmt.sbprint(b, char == 0 ? ' ' : rune(char))
 
 		if is_cursor || is_in_selection {
 			fmt.sbprint(b, "\x1b[0m")
-		}
-	}
+			if is_cursor {
+				fmt.sbprint(b, "\x1b[7m")
+			} else if is_in_selection {
+				fmt.sbprint(b, "\x1b[48;5;239m")
+			}
+			curr_fg, curr_bg = 0xFFFFFFFF, 0xFFFFFFFF
+			curr_mode = {}
+		} else {
+			if glyph.mode != curr_mode || glyph.fg != curr_fg || glyph.bg != curr_bg {
+				fmt.sbprint(b, "\x1b[0m")
 
+				// --- Foreground ---
+				if glyph.fg == DEFAULT_FG {
+					fmt.sbprint(b, "\x1b[39m") // Use Terminal Default FG
+				} else if .TrueColorFG in glyph.mode {
+					r := (glyph.fg >> 16) & 0xFF
+					g := (glyph.fg >> 8) & 0xFF
+					bl := glyph.fg & 0xFF
+					fmt.sbprintf(b, "\x1b[38;2;%d;%d;%dm", r, g, bl)
+				} else {
+					fmt.sbprintf(b, "\x1b[38;5;%dm", glyph.fg)
+				}
+
+				// --- Background ---
+				if glyph.bg == DEFAULT_BG {
+					fmt.sbprint(b, "\x1b[49m") // Use Terminal Default BG
+				} else if .TrueColorBG in glyph.mode {
+					r := (glyph.bg >> 16) & 0xFF
+					g := (glyph.bg >> 8) & 0xFF
+					bl := glyph.bg & 0xFF
+					fmt.sbprintf(b, "\x1b[48;2;%d;%d;%dm", r, g, bl)
+				} else {
+					fmt.sbprintf(b, "\x1b[48;5;%dm", glyph.bg)
+				}
+
+				// ... Apply other modes (Bold, etc.) ...
+				curr_fg, curr_bg, curr_mode = glyph.fg, glyph.bg, glyph.mode
+			}
+		}
+		fmt.sbprint(b, glyph.char == 0 ? ' ' : glyph.char)
+	}
+	fmt.sbprint(b, "\x1b[0m")
 }
 

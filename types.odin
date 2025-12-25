@@ -44,8 +44,33 @@ Mode :: enum {
 	Switch,
 }
 
+Glyph :: struct {
+	char: rune,
+	fg:   u32,
+	bg:   u32,
+	mode: GlyphMode,
+}
+
+BLACK :: 999
+WHITE :: 999
+DEFAULT_FG :: BLACK
+DEFAULT_BG :: WHITE
+GlyphMode :: bit_set[GlyphAttr;u16]
+GlyphAttr :: enum u16 {
+	Bold,
+	Faint,
+	Italic,
+	Underline,
+	Blink,
+	Reverse,
+	Invisible,
+	StrikeThrough,
+	TrueColorFG,
+	TrueColorBG,
+}
+
 Screen :: struct {
-	grid:                 [dynamic]rune,
+	grid:                 [dynamic]Glyph,
 	dirty:                [dynamic]bool,
 	width:                int,
 	height:               int,
@@ -68,7 +93,7 @@ Screen :: struct {
 	cmd_idx:              int,
 
 	// --- SCROLLBACK ---
-	scrollback:           [dynamic][]rune,
+	scrollback:           [dynamic][]Glyph,
 	scroll_offset:        int,
 	total_lines_scrolled: int,
 
@@ -84,9 +109,10 @@ Screen :: struct {
 
 	// ALTERNATE SCREEN BUFFER
 	in_alt_screen:        bool,
-	alt_grid:             [dynamic]rune,
+	alt_grid:             [dynamic]Glyph,
 	alt_cursor_x:         int,
 	alt_cursor_y:         int,
 	resize:               bool,
+	current_attr:         Glyph,
 }
 

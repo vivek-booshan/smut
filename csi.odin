@@ -80,6 +80,7 @@ handle_csi_sequence :: proc(s: ^Screen, b: u8) {
 		handle_erase_in_line(s, mode)
 	case 'h':
 		// DEC Private Mode Set
+		blank := blank_glyph(s)
 		is_private := s.ansi_idx > 0 && s.ansi_buf[0] == '?'
 		if is_private && params[0] == 1049 {
 			if !s.in_alt_screen {
@@ -94,7 +95,7 @@ handle_csi_sequence :: proc(s: ^Screen, b: u8) {
 				s.cursor_x, s.cursor_y = 0, 0
 				s.pty_cursor_x, s.pty_cursor_y = 0, 0
 
-				for i in 0 ..< len(s.alt_grid) {s.alt_grid[i] = rune(0)}
+				for i in 0 ..< len(s.alt_grid) {s.alt_grid[i] = blank}
 				for i in 0 ..< len(s.dirty) {s.dirty[i] = true}
 			}
 		}
@@ -125,10 +126,71 @@ handle_csi_sequence :: proc(s: ^Screen, b: u8) {
 		// DL - Delete Line
 		num := p_idx > 0 ? max(1, params[0]) : 1
 		handle_delete_lines(s, num)
-	case 'm': // SGR - Select Graphic Rendition
-	// This handles colors. For now, we ignore or pass through.
-	// A Suckless multiplexer usually just tracks the "current color"
-	// to apply it to new characters in the grid.
+	case SGR:
+		// SGR - Select Graphic Rendition
+		p_idx, params := ansi_parser(s)
+		if p_idx == 0 {
+			reset_attr(s)
+			return
+		}
+
+		i := 0
+		for i < p_idx {
+			val := params[i]
+
+			switch val {
+			case 0:
+				reset_attr(s)
+			case 1:
+				s.current_attr.mode += {.Bold}
+			case 4:
+				s.current_attr.mode += {.Underline}
+			case 7:
+				s.current_attr.mode += {.Reverse}
+
+			// Standard Foreground (30-37, 90-97)
+			case 30 ..= 37:
+				s.current_attr.fg = u32(val - 30)
+			case 90 ..= 97:
+				s.current_attr.fg = u32(val - 90 + 8)
+
+			// Extended Foreground
+			case 38:
+				i += 1
+				if i >= p_idx do break
+				if params[i] == 5 && i + 1 < p_idx { 	// 256 Color
+					s.current_attr.fg = u32(params[i + 1])
+					i += 1
+				} else if params[i] == 2 && i + 3 < p_idx { 	// TrueColor (RGB)
+					// st often packs RGB into a 32-bit int: 0xRRGGBB
+					r, g, b := u32(params[i + 1]), u32(params[i + 2]), u32(params[i + 3])
+					s.current_attr.fg = (r << 16) | (g << 8) | b
+					s.current_attr.mode += {.TrueColorFG} // Flag to tell drawer to use RGB
+					i += 3
+				}
+
+			// Standard Background (40-47, 100-107)
+			case 40 ..= 47:
+				s.current_attr.bg = u32(val - 40)
+			case 100 ..= 107:
+				s.current_attr.bg = u32(val - 100 + 8)
+
+			// Extended Background
+			case 48:
+				i += 1
+				if i >= p_idx do break
+				if params[i] == 5 && i + 1 < p_idx {
+					s.current_attr.bg = u32(params[i + 1])
+					i += 1
+				} else if params[i] == 2 && i + 3 < p_idx {
+					r, g, b := u32(params[i + 1]), u32(params[i + 2]), u32(params[i + 3])
+					s.current_attr.bg = (r << 16) | (g << 8) | b
+					s.current_attr.mode += {.TrueColorBG}
+					i += 3
+				}
+			}
+			i += 1
+		}
 	}
 
 	s.pty_cursor_x = s.cursor_x
@@ -152,7 +214,14 @@ handle_insert_lines :: proc(s: ^Screen, n: int) {
 	// Clear the inserted lines
 	for y := s.cursor_y; y < s.cursor_y + num; y += 1 {
 		start := y * s.width
-		for x in 0 ..< s.width do grid[start + x] = rune(0)
+		for x in 0 ..< s.width {
+			grid[start + x] = Glyph {
+				char = 0,
+				fg   = s.current_attr.fg,
+				bg   = s.current_attr.bg,
+				mode = s.current_attr.mode,
+			}
+		}
 		s.dirty[y] = true
 	}
 }
@@ -174,30 +243,49 @@ handle_delete_lines :: proc(s: ^Screen, n: int) {
 	// Clear the lines at the bottom of the region
 	for y := s.scroll_bottom - num + 1; y <= s.scroll_bottom; y += 1 {
 		start := y * s.width
-		for x in 0 ..< s.width do grid[start + x] = rune(0)
+		for x in 0 ..< s.width {
+			grid[start + x] = Glyph {
+				char = 0,
+				fg   = s.current_attr.fg,
+				bg   = s.current_attr.bg,
+				mode = s.current_attr.mode,
+			}
+		}
 		s.dirty[y] = true
+	}
+}
+
+blank_glyph :: proc(s: ^Screen) -> Glyph {
+	return Glyph {
+		char = 0,
+		fg = s.current_attr.fg,
+		bg = s.current_attr.bg,
+		mode = s.current_attr.mode,
 	}
 }
 
 handle_erase_in_line :: proc(s: ^Screen, mode: int) {
 	row_start := s.cursor_y * s.width
 	grid := s.in_alt_screen ? s.alt_grid : s.grid
+
+	blank := blank_glyph(s)
 	switch mode {
 	case 0:
 		// Clear from cursor to end of line
-		for x in s.cursor_x ..< s.width {grid[row_start + x] = rune(0)}
+		for x in s.cursor_x ..< s.width {grid[row_start + x] = blank}
 	case 1:
 		// Clear from start of line to cursor
-		for x in 0 ..< s.cursor_x + 1 {grid[row_start + x] = rune(0)}
+		for x in 0 ..< s.cursor_x + 1 {grid[row_start + x] = blank}
 	case 2:
 		// Clear whole line
-		for x in 0 ..< s.width {grid[row_start + x] = rune(0)}
+		for x in 0 ..< s.width {grid[row_start + x] = blank}
 	}
 	s.dirty[s.cursor_y] = true
 }
 
 handle_erase_in_display :: proc(s: ^Screen, mode: int) {
 	grid := s.in_alt_screen ? s.alt_grid : s.grid
+	blank := blank_glyph(s)
 	switch mode {
 	case 0:
 		// Clear from cursor to end of screen
@@ -205,13 +293,20 @@ handle_erase_in_display :: proc(s: ^Screen, mode: int) {
 		handle_erase_in_line(s, 0)
 		// Clear all lines below
 		for y in s.cursor_y + 1 ..< s.height - 1 {
-			for x in 0 ..< s.width {grid[y * s.width + x] = rune(0)}
+			for x in 0 ..< s.width {grid[y * s.width + x] = blank}
 			s.dirty[y] = true
 		}
 	case 2:
 		// Clear whole screen
-		for i in 0 ..< len(grid) {grid[i] = rune(0)}
+		for i in 0 ..< len(grid) {grid[i] = blank}
 		for i in 0 ..< s.height {s.dirty[i] = true}
 	}
+}
+
+reset_attr :: proc(s: ^Screen) {
+	s.current_attr.fg = DEFAULT_FG
+	s.current_attr.bg = DEFAULT_BG
+	s.current_attr.mode = {}
+	s.current_attr.char = 0
 }
 

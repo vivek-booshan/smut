@@ -157,3 +157,12 @@ cfmakeraw :: proc(t: ^posix.termios) {
 	t.c_cflag += {.CS8}
 }
 
+glyph_to_rune :: proc(a: []Glyph) -> []rune {
+	b: [dynamic]rune
+	for g, i in a {
+		b[i] = g.char
+	}
+
+	return b[:]
+}
+

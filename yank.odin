@@ -24,19 +24,23 @@ yank_selection_to_clipboard :: proc(s: ^Screen) {
 		// Find the last non-zero character to avoid yanking trailing nulls
 		last_char_idx := 0
 		for x in 0 ..< term_view_w {
-			if s.grid[row_start + x] != 0 {
+			if s.grid[row_start + x].char != 0 {
 				last_char_idx = x + 1
 			}
 		}
 
+		for x in 0 ..< last_char_idx {
+			g := s.grid[row_start + x]
+			strings.write_rune(&builder, g.char)
+		}
 
-		row_str := utf8.runes_to_string(s.grid[row_start:row_start + last_char_idx])
-		strings.write_string(&builder, row_str)
+		// row_str := utf8.runes_to_string(s.grid[row_start:row_start + last_char_idx])
+		// strings.write_string(&builder, row_str)
 		if y < high {
 			strings.write_byte(&builder, '\n')
 		}
-	}
 
+	}
 	full_text := strings.to_string(builder)
 
 	// 2. Pipe the text to the system clipboard
