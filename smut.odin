@@ -69,6 +69,11 @@ main :: proc() {
 	fmt.print("\x1b[?1049h\x1b[?25l")
 	defer fmt.print("\x1b[?1049l\x1b[?25h")
 
+	// enable mouse tracking (1000)
+	// SGR extended mode (1006)
+	fmt.print("\x1b[?1000h\x1b[?1006h")
+	defer fmt.print("\x1b[?1006l\x1b[?1000l")
+
 	buf: [4096]byte
 	running := true
 

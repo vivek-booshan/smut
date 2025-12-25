@@ -164,35 +164,41 @@ handle_input :: proc(input: []u8, master_fd: posix.FD) {
 		screen.cursor_x = screen.pty_cursor_x
 		screen.cursor_y = screen.pty_cursor_y
 	}
-	for &b in input {
+	for &b, i in input {
 		// Mode: NORMAL
 		k := Key(b)
+
 		if k == .CTRLB {
 			screen.mode = .Switch
 			screen.cmd_idx = 0
 			continue
 		}
 
-		if screen.mode == .Switch {
-			// 2. Buffer the keystroke for the status bar
-			status_bar_keystroke_buffer(rune(b))
-			handle_switch_inputs(b)
-			continue
-		}
-		if screen.mode == .Motion || screen.mode == .Select {
-			status_bar_keystroke_buffer(rune(b))
-			count := command_multiplier()
-			handle_motion_inputs(b, count)
+		if k == .ESCAPE {
+			process_output(&screen, input[i:i + 1])
 			continue
 		}
 
-		// if b == 27 {
-		// 	screen.mode = .Motion
-		// 	screen.cmd_idx = 0
-		// 	continue
-		// }
+		if screen.ansi_state == .Ground {
 
-		posix.write(master_fd, &b, 1)
+			if screen.mode == .Switch {
+				// 2. Buffer the keystroke for the status bar
+				status_bar_keystroke_buffer(rune(b))
+				handle_switch_inputs(b)
+				continue
+			}
+			if screen.mode == .Motion || screen.mode == .Select {
+				status_bar_keystroke_buffer(rune(b))
+				count := command_multiplier()
+				handle_motion_inputs(b, count)
+				continue
+			}
+
+			posix.write(master_fd, &b, 1)
+		} else {
+			handle_ansi_byte(&screen, b)
+		}
+
 	}
 }
 

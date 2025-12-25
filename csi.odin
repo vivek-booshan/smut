@@ -1,5 +1,8 @@
 package smut
 
+SCROLLUP :: 64
+SCROLLDOWN :: 65
+
 ansi_parser :: proc(s: ^Screen) -> (int, [8]int) {
 	params: [8]int // Standard ANSI usually needs no more than 2-3
 	p_idx := 0
@@ -37,6 +40,8 @@ handle_csi_sequence :: proc(s: ^Screen, b: u8) {
 
 	// Switch
 	p_idx, params := ansi_parser(s)
+	// SGR mouse protocol : \x1b[<button;x;yM
+	is_mouse := s.ansi_idx > 0 && s.ansi_buf[0] == '<'
 	// Dispatcher
 	switch b {
 	case 'H', 'f':
@@ -124,78 +129,99 @@ handle_csi_sequence :: proc(s: ^Screen, b: u8) {
 		handle_insert_lines(s, num)
 	case 'M':
 		// DL - Delete Line
-		num := p_idx > 0 ? max(1, params[0]) : 1
-		handle_delete_lines(s, num)
+		if is_mouse && p_idx >= 3 {
+			button := params[0]
+			if button == SCROLLUP {
+				s.scroll_offset = min(len(s.scrollback), s.scroll_offset + 3)
+			} else if button == SCROLLDOWN {
+				s.scroll_offset = max(0, s.scroll_offset - 3)
+			}
+		} else {
+			num := p_idx > 0 ? max(1, params[0]) : 1
+			handle_delete_lines(s, num)
+		}
 	case SGR:
 		// SGR - Select Graphic Rendition
-		p_idx, params := ansi_parser(s)
-		if p_idx == 0 {
-			reset_attr(s)
-			return
-		}
-
-		i := 0
-		for i < p_idx {
-			val := params[i]
-
-			switch val {
-			case 0:
-				reset_attr(s)
-			case 1:
-				s.current_attr.mode += {.Bold}
-			case 4:
-				s.current_attr.mode += {.Underline}
-			case 7:
-				s.current_attr.mode += {.Reverse}
-
-			// Standard Foreground (30-37, 90-97)
-			case 30 ..= 37:
-				s.current_attr.fg = u32(val - 30)
-			case 90 ..= 97:
-				s.current_attr.fg = u32(val - 90 + 8)
-
-			// Extended Foreground
-			case 38:
-				i += 1
-				if i >= p_idx do break
-				if params[i] == 5 && i + 1 < p_idx { 	// 256 Color
-					s.current_attr.fg = u32(params[i + 1])
-					i += 1
-				} else if params[i] == 2 && i + 3 < p_idx { 	// TrueColor (RGB)
-					// st often packs RGB into a 32-bit int: 0xRRGGBB
-					r, g, b := u32(params[i + 1]), u32(params[i + 2]), u32(params[i + 3])
-					s.current_attr.fg = (r << 16) | (g << 8) | b
-					s.current_attr.mode += {.TrueColorFG} // Flag to tell drawer to use RGB
-					i += 3
-				}
-
-			// Standard Background (40-47, 100-107)
-			case 40 ..= 47:
-				s.current_attr.bg = u32(val - 40)
-			case 100 ..= 107:
-				s.current_attr.bg = u32(val - 100 + 8)
-
-			// Extended Background
-			case 48:
-				i += 1
-				if i >= p_idx do break
-				if params[i] == 5 && i + 1 < p_idx {
-					s.current_attr.bg = u32(params[i + 1])
-					i += 1
-				} else if params[i] == 2 && i + 3 < p_idx {
-					r, g, b := u32(params[i + 1]), u32(params[i + 2]), u32(params[i + 3])
-					s.current_attr.bg = (r << 16) | (g << 8) | b
-					s.current_attr.mode += {.TrueColorBG}
-					i += 3
-				}
+		if is_mouse && p_idx >= 3 {
+			button := params[0]
+			if button == SCROLLUP {
+				s.scroll_offset = min(len(s.scrollback), s.scroll_offset + 3)
+			} else if button == SCROLLDOWN {
+				s.scroll_offset = max(0, s.scroll_offset - 3)
 			}
-			i += 1
+		} else {
+			handle_sgr_sequence(s, p_idx, params)
 		}
 	}
-
 	s.pty_cursor_x = s.cursor_x
 	s.pty_cursor_y = s.cursor_y
 }
+
+handle_sgr_sequence :: proc(s: ^Screen, p_idx: int, params: [8]int) {
+	if p_idx == 0 {
+		reset_attr(s)
+		return
+	}
+
+	i := 0
+	for i < p_idx {
+		val := params[i]
+
+		switch val {
+		case 0:
+			reset_attr(s)
+		case 1:
+			s.current_attr.mode += {.Bold}
+		case 4:
+			s.current_attr.mode += {.Underline}
+		case 7:
+			s.current_attr.mode += {.Reverse}
+
+		// Standard Foreground (30-37, 90-97)
+		case 30 ..= 37:
+			s.current_attr.fg = u32(val - 30)
+		case 90 ..= 97:
+			s.current_attr.fg = u32(val - 90 + 8)
+
+		// Extended Foreground
+		case 38:
+			i += 1
+			if i >= p_idx do break
+			if params[i] == 5 && i + 1 < p_idx { 	// 256 Color
+				s.current_attr.fg = u32(params[i + 1])
+				i += 1
+			} else if params[i] == 2 && i + 3 < p_idx { 	// TrueColor (RGB)
+				// st often packs RGB into a 32-bit int: 0xRRGGBB
+				r, g, b := u32(params[i + 1]), u32(params[i + 2]), u32(params[i + 3])
+				s.current_attr.fg = (r << 16) | (g << 8) | b
+				s.current_attr.mode += {.TrueColorFG} // Flag to tell drawer to use RGB
+				i += 3
+			}
+
+		// Standard Background (40-47, 100-107)
+		case 40 ..= 47:
+			s.current_attr.bg = u32(val - 40)
+		case 100 ..= 107:
+			s.current_attr.bg = u32(val - 100 + 8)
+
+		// Extended Background
+		case 48:
+			i += 1
+			if i >= p_idx do break
+			if params[i] == 5 && i + 1 < p_idx {
+				s.current_attr.bg = u32(params[i + 1])
+				i += 1
+			} else if params[i] == 2 && i + 3 < p_idx {
+				r, g, b := u32(params[i + 1]), u32(params[i + 2]), u32(params[i + 3])
+				s.current_attr.bg = (r << 16) | (g << 8) | b
+				s.current_attr.mode += {.TrueColorBG}
+				i += 3
+			}
+		}
+		i += 1
+	}
+}
+
 
 handle_insert_lines :: proc(s: ^Screen, n: int) {
 	if s.cursor_y < s.scroll_top || s.cursor_y > s.scroll_bottom do return
