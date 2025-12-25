@@ -14,10 +14,15 @@ foreign libc {
 	signal :: proc(sig: i32, handler: rawptr) -> rawptr ---
 }
 
-
 SIGWINCH :: 28
-TIOCSWINSZ :: 0x80087467
-TIOCSCTTY :: 0x540E
+
+when ODIN_OS == .Darwin {
+	TIOCSWINSZ :: 0x80087467
+	TIOCSCTTY :: 0x20007461
+} else {
+	TIOCSWINSZ :: 0x5414
+	TIOCSCTTY :: 0x540E
+}
 
 screen: Screen
 should_resize := true
@@ -41,12 +46,11 @@ main :: proc() {
 		login_tty(butler_fd)
 		// Set initial size for the shell based on fetched dimensions
 		set_window_size(butler_fd, screen.width - GUTTER_W, screen.height - 1)
-		// shell_path := os.get_env("SHELL")
-		// cpath := strings.clone_to_cstring(shell_path)
-		// shell_name := filepath.base(shell_path)
-		// cname := strings.clone_to_cstring(shell_name)
-		args := [2]cstring{"fish", nil}
-		posix.execvp("/run/current-system/sw/bin/fish", &args[0])
+		shell_path := os.get_env("SHELL")
+		cpath := strings.clone_to_cstring(shell_path)
+		shell_name := filepath.base(shell_path)
+		cname := strings.clone_to_cstring(shell_name)
+		posix.execl(cpath, cname, nil)
 		posix.exit(1)
 	}
 
