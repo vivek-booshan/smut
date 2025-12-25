@@ -8,6 +8,10 @@ import "core:unicode/utf8"
 
 MAX_SCROLLBACK :: 4096
 
+INDEX :: 'D' // Line Feed
+REVERSE_INDEX :: 'M' // Move Cursor Up? It just works ig
+RIS :: 'c' // Reset to Initial State
+
 resize_screen :: proc(s: ^Screen, pty_fd: posix.FD) {
 	ws: struct {
 		r, c, x, y: u16,
@@ -226,9 +230,6 @@ handle_str_sequence :: proc(s: ^Screen) {
 	}
 }
 
-INDEX :: 'D' // Line Feed
-REVERSE_INDEX :: 'M' // Move Cursor Up? It just works ig
-RIS :: 'c' // Reset to Initial State
 handle_esc_char :: proc(s: ^Screen, b: u8) {
 	switch b {
 	case INDEX:

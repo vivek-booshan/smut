@@ -18,3 +18,5 @@ Ctrl B + s : Select Mode (currently same as motion)
 - implement b, B, e, E, t, T, f, F
 - implement goto mode (maybe just make this current line specific?)
 - implement vim style Select Mode in Select Mode 
+- Kitty Graphics Protocol (is it even necessary?)
+- Kitty Keyboard Protocol (is it even necessary?)
