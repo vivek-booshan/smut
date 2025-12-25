@@ -158,23 +158,24 @@ handle_select_inputs :: handle_motion_inputs
 
 handle_input :: proc(input: []u8, master_fd: posix.FD) {
 
-	if len(input) > 5 && (screen.mode != .Insert) {
+	// NOTE (VIVEK): such a niche situation, do i even want to handle this?
+	burst := len(input) > 5
+	key_not_escape := Key(input[0]) != .ESCAPE
+	if (burst && (screen.mode != .Insert) && key_not_escape) {
 		screen.mode = .Insert
 		screen.scroll_offset = 0
 		screen.cursor_x = screen.pty_cursor_x
 		screen.cursor_y = screen.pty_cursor_y
 	}
 	for &b, i in input {
-		// Mode: NORMAL
 		k := Key(b)
 
-		if k == .CTRLB {
+		#partial switch k {
+		case .CTRLB:
 			screen.mode = .Switch
 			screen.cmd_idx = 0
 			continue
-		}
-
-		if k == .ESCAPE {
+		case .ESCAPE:
 			process_output(&screen, input[i:i + 1])
 			continue
 		}
@@ -182,12 +183,10 @@ handle_input :: proc(input: []u8, master_fd: posix.FD) {
 		if screen.ansi_state == .Ground {
 
 			if screen.mode == .Switch {
-				// 2. Buffer the keystroke for the status bar
 				status_bar_keystroke_buffer(rune(b))
 				handle_switch_inputs(b)
 				continue
-			}
-			if screen.mode == .Motion || screen.mode == .Select {
+			} else if screen.mode == .Motion || screen.mode == .Select {
 				status_bar_keystroke_buffer(rune(b))
 				count := command_multiplier()
 				handle_motion_inputs(b, count)

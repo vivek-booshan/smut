@@ -103,7 +103,7 @@ process_output :: proc(s: ^Screen, data: []u8) {
 
 		b := data[i]
 		// High Priority Byte
-		if b < CONTROL_CODES {
+		if b < CONTROLC0 {
 			switch b {
 			case ESC:
 				s.ansi_state = .Escape
@@ -132,7 +132,7 @@ process_output :: proc(s: ^Screen, data: []u8) {
 		partial_rune := r == utf8.RUNE_ERROR && width <= 1 && i + width == len(data)
 		if partial_rune do break
 
-		if r < CONTROL_CODES || r == DEL {
+		if r < CONTROLC0 || r == DEL {
 			handle_control_char(s, r, current_w)
 		} else {
 			write_rune_to_grid(s, r, current_w)
@@ -189,7 +189,7 @@ handle_ansi_byte :: proc(s: ^Screen, b: byte) {
 }
 
 write_rune_to_grid :: proc(s: ^Screen, b: rune, current_w: int) {
-	if b < CONTROL_CODES do return
+	if b < CONTROLC0 do return
 
 	VIEW_LIMIT := s.height - 2
 	if s.cursor_x >= current_w {
@@ -312,6 +312,7 @@ get_row_data :: proc(abs_line: int) -> (row_data: []Glyph, is_history: bool) {
 	return row_data, is_history
 
 }
+
 within_selection :: proc(y: int) -> bool {
 	if !screen.is_selecting do return false
 	low := min(screen.selection_start_y, screen.cursor_y)
