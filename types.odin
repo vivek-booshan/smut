@@ -4,7 +4,7 @@ import "core:sys/posix"
 
 GUTTER_W :: 5
 
-CONTROL_CODES :: 32
+CONTROLC0 :: 32
 DEL :: 127
 BEL :: 0x07
 TAB :: 0x09
