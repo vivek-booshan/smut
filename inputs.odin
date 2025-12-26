@@ -176,8 +176,10 @@ handle_input :: proc(input: []u8, master_fd: posix.FD) {
 			screen.cmd_idx = 0
 			continue
 		case .ESCAPE:
-			process_output(&screen, input[i:i + 1])
-			continue
+			if !screen.in_alt_screen {
+				process_output(&screen, input[i:i + 1])
+				continue
+			}
 		}
 
 		if screen.ansi_state == .Ground {
