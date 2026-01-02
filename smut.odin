@@ -120,7 +120,7 @@ main :: proc() {
 			}
 		}
 		// draw_screen()
-		if pty_activity || user_input || should_resize do draw_screen()
+		if pty_activity || should_resize do draw_screen()
 	}
 }
 
