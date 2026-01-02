@@ -108,20 +108,9 @@ process_output :: proc(s: ^Screen, data: []u8) {
 		b := data[i]
 		// High Priority Byte
 		if b < CONTROLC0 {
-			switch b {
-			case ESC:
-				s.ansi_state = .Escape
-				s.ansi_idx = 0
-				i += 1
-				continue
-			case BEL:
-				if s.ansi_state == .STR {
-					handle_str_sequence(s)
-					s.ansi_state = .Ground
-				}
-				i += 1
-				continue
-			}
+			handle_control_char(s, rune(b), current_w)
+			i += 1
+			continue
 		}
 
 		// Non Ground State Dispatch
@@ -223,10 +212,10 @@ write_rune_to_grid :: proc(s: ^Screen, b: rune, current_w: int) {
 }
 
 handle_str_sequence :: proc(s: ^Screen) {
-	// OSC (type ']') is common for titles. 
-	// Format: \e]0;TITLE\x07
+	// OSC (type ']') is common for titles.
+	// Format :\e]0;TITLE\x07
 	if s.str_type == ']' {
-		// Log or handle window title changes here
+		// Log or handle window title change
 	}
 }
 
@@ -369,6 +358,12 @@ handle_control_char :: proc(s: ^Screen, b: rune, current_w: int) {
 	case '\r':
 		s.cursor_x = 0
 		s.pty_cursor_x = 0
+	case BEL:
+		if s.ansi_state == .STR {
+			handle_str_sequence(s)
+			s.ansi_state = .Ground
+		}
+
 	}
 }
 
