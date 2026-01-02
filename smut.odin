@@ -26,8 +26,9 @@ when ODIN_OS == .Darwin {
 
 screen: Screen
 should_resize := true
+master_fd: posix.FD
 main :: proc() {
-	master_fd, butler_fd: posix.FD
+	butler_fd: posix.FD
 
 	// Signal Handler for Resizing 
 	signal(SIGWINCH, rawptr(handle_winch))
@@ -74,7 +75,7 @@ main :: proc() {
 	fmt.print("\x1b[?1000h\x1b[?1006h")
 	defer fmt.print("\x1b[?1006l\x1b[?1000l")
 
-	buf: [4096]byte
+	buf: [65336]byte
 	running := true
 
 	posix.fcntl(master_fd, .SETFL, posix.O_NONBLOCK)
@@ -104,12 +105,13 @@ main :: proc() {
 		}
 
 		// NOTE(VIVEK): drain pty output before draw
-		pty_activity := .IN in fds[1].revents
-		if pty_activity {
+		pty_activity := false
+		if .IN in fds[1].revents {
 			for {
 				n := posix.read(master_fd, &buf[0], len(buf))
 				if n > 0 {
 					process_output(&screen, buf[:n])
+					pty_activity = true
 				} else {
 					// End of stream or EWOULDBLOCK
 					if n == 0 do running = false
