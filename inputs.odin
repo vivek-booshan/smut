@@ -141,16 +141,14 @@ handle_motion_inputs :: proc(b: u8, count: int) -> bool {
 		screen.scroll_offset = 0
 		screen.cursor_x = screen.pty_cursor_x
 		screen.cursor_y = screen.pty_cursor_y
-	case 27:
+	case ESC:
 		// ESC
 		screen.is_selecting = false
 	case:
 		ok = false
 	}
 
-	if ok {
-		screen.cmd_idx = 0
-	}
+	if ok do screen.cmd_idx = 0
 	return ok
 }
 
@@ -171,33 +169,37 @@ handle_input :: proc(input: []u8, master_fd: posix.FD) {
 		k := Key(b)
 
 		#partial switch k {
-		case .CTRLB:
+		case .LEADER:
 			screen.mode = .Switch
 			screen.cmd_idx = 0
 			continue
 		case .ESCAPE:
-			if !screen.in_alt_screen {
+			if !screen.in_alt_screen && screen.mode != .Insert {
 				process_output(&screen, input[i:i + 1])
 				continue
 			}
 		}
 
-		if screen.ansi_state == .Ground {
-
-			if screen.mode == .Switch {
-				status_bar_keystroke_buffer(rune(b))
-				handle_switch_inputs(b)
-				continue
-			} else if screen.mode == .Motion || screen.mode == .Select {
-				status_bar_keystroke_buffer(rune(b))
-				count := command_multiplier()
-				handle_motion_inputs(b, count)
-				continue
-			}
-
+		if screen.mode == .Insert {
 			posix.write(master_fd, &b, 1)
 		} else {
-			handle_ansi_byte(&screen, b)
+			if screen.ansi_state == .Ground {
+
+				if screen.mode == .Switch {
+					status_bar_keystroke_buffer(rune(b))
+					handle_switch_inputs(b)
+					continue
+				} else if screen.mode == .Motion || screen.mode == .Select {
+					status_bar_keystroke_buffer(rune(b))
+					count := command_multiplier()
+					handle_motion_inputs(b, count)
+					continue
+				}
+
+				posix.write(master_fd, &b, 1)
+			} else {
+				handle_ansi_byte(&screen, b)
+			}
 		}
 
 	}
