@@ -268,25 +268,27 @@ handle_scrolling :: proc(s: ^Screen) {
 		limit = s.height - 2
 	}
 
-	if s.cursor_y > limit {
-		s.cursor_y = limit
-
-		handle_scrollback(s)
-		grid := s.in_alt_screen ? s.alt_grid : s.grid
-
-		// Shift within the region
-		dst_start := s.scroll_top * s.width
-		src_start := (s.scroll_top + 1) * s.width
-		len_bytes := (limit - s.scroll_top) * s.width
-
-		copy(grid[dst_start:], grid[src_start:src_start + len_bytes])
-
-		// Clear only the bottom row of the scrolling region
-		clear_start := limit * s.width
-		for i in 0 ..< s.width {grid[clear_start + i] = blank_glyph(s)}
-
-		for i in s.scroll_top ..= limit {s.dirty[i] = true}
+	if s.cursor_y <= limit {
+		return
 	}
+
+	s.cursor_y = limit
+
+	handle_scrollback(s)
+	grid := s.in_alt_screen ? s.alt_grid : s.grid
+
+	// Shift within the region
+	dst_start := s.scroll_top * s.width
+	src_start := (s.scroll_top + 1) * s.width
+	len_bytes := (limit - s.scroll_top) * s.width
+
+	copy(grid[dst_start:], grid[src_start:src_start + len_bytes])
+
+	// Clear only the bottom row of the scrolling region
+	clear_start := limit * s.width
+	for i in 0 ..< s.width {grid[clear_start + i] = blank_glyph(s)}
+
+	for i in s.scroll_top ..= limit {s.dirty[i] = true}
 }
 
 get_row_data :: proc(abs_line: int) -> (row_data: []Glyph, is_history: bool) {
@@ -493,7 +495,9 @@ draw_grid :: proc(
 				} else {
 					fmt.sbprintf(b, "\x1b[48;5;%dm", glyph.bg)
 				}
-
+				if .Bold in glyph.mode do fmt.sbprint(b, "\x1b[1m")
+				if .Italic in glyph.mode do fmt.sbprint(b, "\x1b[3m")
+				if .Underline in glyph.mode do fmt.sbprint(b, "\x1b[4m")
 				// ... Apply other modes (Bold, etc.) ...
 				curr_fg, curr_bg, curr_mode = glyph.fg, glyph.bg, glyph.mode
 			}
