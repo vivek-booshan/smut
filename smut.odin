@@ -77,6 +77,7 @@ main :: proc() {
 	buf: [4096]byte
 	running := true
 
+	posix.fcntl(master_fd, .SETFL, posix.O_NONBLOCK)
 	for running {
 		if should_resize {
 			should_resize = false
@@ -94,20 +95,30 @@ main :: proc() {
 			continue
 		}
 
-		if .IN in fds[0].revents {
+		user_input := .IN in fds[0].revents
+		if user_input {
 			n := posix.read(posix.STDIN_FILENO, &buf[0], len(buf))
 			if n > 0 {
 				handle_input(buf[:n], master_fd)
 			}
 		}
 
-		if .IN in fds[1].revents {
-			n := posix.read(master_fd, &buf[0], len(buf))
-			if n <= 0 {running = false;break}
-			process_output(&screen, buf[:n])
+		// NOTE(VIVEK): drain pty output before draw
+		pty_activity := .IN in fds[1].revents
+		if pty_activity {
+			for {
+				n := posix.read(master_fd, &buf[0], len(buf))
+				if n > 0 {
+					process_output(&screen, buf[:n])
+				} else {
+					// End of stream or EWOULDBLOCK
+					if n == 0 do running = false
+					break
+				}
+			}
 		}
-
-		draw_screen()
+		// draw_screen()
+		if pty_activity || user_input || should_resize do draw_screen()
 	}
 }
 
