@@ -154,9 +154,7 @@ handle_motion_inputs :: proc(b: u8, count: int) -> bool {
 
 handle_select_inputs :: handle_motion_inputs
 
-handle_input :: proc(input: []u8, master_fd: posix.FD) {
-
-	// NOTE (VIVEK): such a niche situation, do i even want to handle this?
+handle_burst :: proc(input: []u8) {
 	burst := len(input) > 5
 	key_not_escape := Key(input[0]) != .ESCAPE
 	if (burst && (screen.mode != .Insert) && key_not_escape) {
@@ -165,41 +163,50 @@ handle_input :: proc(input: []u8, master_fd: posix.FD) {
 		screen.cursor_x = screen.pty_cursor_x
 		screen.cursor_y = screen.pty_cursor_y
 	}
+}
+
+handle_input :: proc(input: []u8, master_fd: posix.FD) {
+
+	// NOTE (VIVEK): such a niche situation, do i even want to handle this?
+	// handle_burst(input) // basically handle a paste event
+
 	for &b, i in input {
 		k := Key(b)
 
-		#partial switch k {
-		case .LEADER:
+		if k == .LEADER {
 			screen.mode = .Switch
 			screen.cmd_idx = 0
 			continue
-		case .ESCAPE:
-			if !screen.in_alt_screen && screen.mode != .Insert {
+		}
+
+		if screen.mode == .Insert {
+			posix.write(master_fd, &b, 1)
+			continue
+		}
+
+		if k == .ESCAPE {
+			if !screen.in_alt_screen {
 				process_output(&screen, input[i:i + 1])
 				continue
 			}
 		}
 
-		if screen.mode == .Insert {
+		if screen.ansi_state != .Ground {
+			handle_ansi_byte(&screen, b)
+			continue
+		}
+
+		switch screen.mode {
+		case .Switch:
+			status_bar_keystroke_buffer(rune(b))
+			handle_switch_inputs(b)
+		case .Motion, .Select:
+			status_bar_keystroke_buffer(rune(b))
+			count := command_multiplier()
+			handle_motion_inputs(b, count)
+		case .Insert:
+			// technically unreachable
 			posix.write(master_fd, &b, 1)
-		} else {
-			if screen.ansi_state == .Ground {
-
-				if screen.mode == .Switch {
-					status_bar_keystroke_buffer(rune(b))
-					handle_switch_inputs(b)
-					continue
-				} else if screen.mode == .Motion || screen.mode == .Select {
-					status_bar_keystroke_buffer(rune(b))
-					count := command_multiplier()
-					handle_motion_inputs(b, count)
-					continue
-				}
-
-				posix.write(master_fd, &b, 1)
-			} else {
-				handle_ansi_byte(&screen, b)
-			}
 		}
 
 	}
