@@ -127,7 +127,7 @@ main :: proc() {
 				}
 			}
 		}
-		// draw_screen()
+
 		if pty_activity || ui_changed || should_resize do draw_screen()
 	}
 }

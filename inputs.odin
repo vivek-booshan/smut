@@ -165,8 +165,8 @@ handle_burst :: proc(input: []u8) {
 	}
 }
 
-handle_input :: proc(input: []u8, master_fd: posix.FD) {
-
+handle_input :: proc(input: []u8, master_fd: posix.FD) -> bool {
+	ui_changed := false
 	// NOTE (VIVEK): such a niche situation, do i even want to handle this?
 	// handle_burst(input) // basically handle a paste event
 
@@ -176,6 +176,7 @@ handle_input :: proc(input: []u8, master_fd: posix.FD) {
 		if k == .LEADER {
 			screen.mode = .Switch
 			screen.cmd_idx = 0
+			ui_changed = true
 			continue
 		}
 
@@ -185,6 +186,7 @@ handle_input :: proc(input: []u8, master_fd: posix.FD) {
 		}
 
 		if k == .ESCAPE {
+			if screen.in_alt_screen do break
 			if !screen.in_alt_screen {
 				process_output(&screen, input[i:i + 1])
 				continue
@@ -196,6 +198,7 @@ handle_input :: proc(input: []u8, master_fd: posix.FD) {
 			continue
 		}
 
+		ui_changed = true
 		switch screen.mode {
 		case .Switch:
 			status_bar_keystroke_buffer(rune(b))
@@ -210,5 +213,6 @@ handle_input :: proc(input: []u8, master_fd: posix.FD) {
 		}
 
 	}
+	return ui_changed
 }
 
