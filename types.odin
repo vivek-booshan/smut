@@ -114,6 +114,9 @@ Screen :: struct {
 	utf8_len:             int,
 	osc_buf:              [dynamic]u8,
 
+	// OUTPUT BUFFER
+	reply_buf:            [dynamic]u8,
+
 	// ALTERNATE SCREEN BUFFER
 	in_alt_screen:        bool,
 	alt_grid:             [dynamic]Glyph,

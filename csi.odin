@@ -1,5 +1,6 @@
 package smut
 
+import "core:fmt"
 import "core:unicode/utf8"
 
 parser_clear :: proc(s: ^Screen) {
@@ -195,6 +196,36 @@ handle_csi_dispatch :: proc(s: ^Screen, final: u8) {
 	}
 
 	switch final {
+	case 'c':
+		// DA - Device Status Report
+		if s.parser_private == '>' {
+			// Secondary Device Attribute 
+			// Request: CSI > c
+			// Response: CSI > 41 ; 350 ; 0 c (VT420 / xterm compatible)
+			resp := "\x1b[>41;350;0c"
+			append(&s.reply_buf, ..transmute([]u8)resp)
+		} else {
+			// Primary Device Attribute
+			// Request: CSI c
+			// Response: CSI ? 62 ; c (VT220)
+			resp := "\x1b[?62;c"
+			append(&s.reply_buf, ..transmute([]u8)resp)
+		}
+	case 'n':
+		// DSR - Device Status Report
+		status := get_p(params, 0, 0)
+		switch status {
+		case 5:
+			// Report Status OK
+			resp := "\x1b[0n"
+			append(&s.reply_buf, ..transmute([]u8)resp)
+		case 6:
+			// CPR - Cursor Position Report
+			r := s.cursor_y + 1
+			c := s.cursor_x + 1
+			resp := fmt.tprintf("\x1b[%d;%dR", r, c)
+			append(&s.reply_buf, ..transmute([]u8)resp)
+		}
 	case '@':
 		// ICH - Insert Character
 		handle_insert_char(s, get_p(params, 0, 1))
