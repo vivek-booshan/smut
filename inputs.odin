@@ -154,21 +154,8 @@ handle_motion_inputs :: proc(b: u8, count: int) -> bool {
 
 handle_select_inputs :: handle_motion_inputs
 
-handle_burst :: proc(input: []u8) {
-	burst := len(input) > 5
-	key_not_escape := Key(input[0]) != .ESCAPE
-	if (burst && (screen.mode != .Insert) && key_not_escape) {
-		screen.mode = .Insert
-		screen.scroll_offset = 0
-		screen.cursor_x = screen.pty_cursor_x
-		screen.cursor_y = screen.pty_cursor_y
-	}
-}
-
 handle_input :: proc(input: []u8, master_fd: posix.FD) -> bool {
 	ui_changed := false
-	// NOTE (VIVEK): such a niche situation, do i even want to handle this?
-	// handle_burst(input) // basically handle a paste event
 
 	for &b, i in input {
 		k := Key(b)
