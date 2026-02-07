@@ -3,6 +3,8 @@ package smut
 import "core:fmt"
 import "core:unicode/utf8"
 
+ALT_SCREEN :: 1049
+
 parser_clear :: proc(s: ^Screen) {
 	clear(&s.parser_params)
 	s.parser_current_param = 0
@@ -295,7 +297,7 @@ handle_csi_dispatch :: proc(s: ^Screen, final: u8) {
 		// SM
 		if s.parser_private == '?' {
 			mode := get_p(params, 0, 0)
-			if mode == 1049 && !s.in_alt_screen {
+			if mode == ALT_SCREEN && !s.in_alt_screen {
 				s.in_alt_screen = true
 				s.main_cursor_x = s.cursor_x
 				s.main_cursor_y = s.cursor_y
@@ -306,6 +308,7 @@ handle_csi_dispatch :: proc(s: ^Screen, final: u8) {
 				blank := blank_glyph(s)
 				for i in 0 ..< len(s.alt_grid) {s.alt_grid[i] = blank}
 				for i in 0 ..< len(s.dirty) {s.dirty[i] = true}
+				resize_screen(s, master_fd)
 			} else if mode == 25 {
 				s.cursor_visible = true
 			}
@@ -314,11 +317,12 @@ handle_csi_dispatch :: proc(s: ^Screen, final: u8) {
 		// RM
 		if s.parser_private == '?' {
 			mode := get_p(params, 0, 0)
-			if mode == 1049 && s.in_alt_screen {
+			if mode == ALT_SCREEN && s.in_alt_screen {
 				s.in_alt_screen = false
 				s.cursor_x = s.main_cursor_x
 				s.cursor_y = s.main_cursor_y
 				for i in 0 ..< s.height {s.dirty[i] = true}
+				resize_screen(s, master_fd)
 			} else if mode == 25 {
 				s.cursor_visible = false
 			}
