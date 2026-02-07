@@ -258,6 +258,22 @@ draw_screen :: proc() {
 
 	draw_status_bar(&b)
 	fmt.sbprint(&b, "\x1b[0m")
+
+	if screen.cursor_visible {
+		// Terminals 1-indexed
+		offset_x := screen.in_alt_screen ? 1 : (1 + GUTTER_W)
+		phys_x := screen.cursor_x + offset_x
+		phys_y := screen.cursor_y + 1
+		fmt.sbprintf(&b, "\x1b[%d;%dH", phys_y, phys_x)
+
+		style := screen.cursor_style == 0 ? 2 : screen.cursor_style
+		fmt.sbprintf(&b, "\x1b[%d q", style)
+
+		fmt.sbprint(&b, "\x1b[?25h")
+	} else {
+		fmt.sbprint(&b, "\x1b[?25l")
+	}
+
 	fmt.print(strings.to_string(b))
 }
 
@@ -297,15 +313,16 @@ draw_grid :: proc(
 
 	for x in 0 ..< view_w {
 		glyph := row_data[x]
-		is_cursor := (x == screen.cursor_x && y == screen.cursor_y)
+		// is_cursor := (x == screen.cursor_x && y == screen.cursor_y)
 
-		if is_cursor || is_in_selection {
+		// if is_cursor || is_in_selection {
+		if is_in_selection {
 			fmt.sbprint(b, "\x1b[0m")
-			if is_cursor {
-				fmt.sbprint(b, "\x1b[7m")
-			} else if is_in_selection {
-				fmt.sbprint(b, "\x1b[48;5;239m")
-			}
+			// if is_cursor {
+			// 	fmt.sbprint(b, "\x1b[7m")
+			// } else if is_in_selection {
+			fmt.sbprint(b, "\x1b[48;5;239m")
+			// }
 			curr_fg, curr_bg = 0xFFFFFFFF, 0xFFFFFFFF
 			curr_mode = {}
 		} else {

@@ -306,6 +306,8 @@ handle_csi_dispatch :: proc(s: ^Screen, final: u8) {
 				blank := blank_glyph(s)
 				for i in 0 ..< len(s.alt_grid) {s.alt_grid[i] = blank}
 				for i in 0 ..< len(s.dirty) {s.dirty[i] = true}
+			} else if mode == 25 {
+				s.cursor_visible = true
 			}
 		}
 	case 'l':
@@ -317,7 +319,16 @@ handle_csi_dispatch :: proc(s: ^Screen, final: u8) {
 				s.cursor_x = s.main_cursor_x
 				s.cursor_y = s.main_cursor_y
 				for i in 0 ..< s.height {s.dirty[i] = true}
+			} else if mode == 25 {
+				s.cursor_visible = false
 			}
+		}
+	case 'q':
+		// DECSUSR - Set Cursor Style
+		// Sequence : CSI Ps SP q
+		if s.parser_intermediate == ' ' {
+			style := get_p(params, 0, 0)
+			s.cursor_style = style
 		}
 	case 'r':
 		// DECSTBM

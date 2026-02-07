@@ -124,5 +124,9 @@ Screen :: struct {
 	alt_cursor_y:         int,
 	resize:               bool,
 	current_attr:         Glyph,
+
+	// Cursor State
+	cursor_style:         int,
+	cursor_visible:       bool,
 }
 
