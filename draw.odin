@@ -30,10 +30,16 @@ resize_screen :: proc(s: ^Screen, pty_fd: posix.FD) {
 
 	if old_w != s.width || old_h != s.height || len(s.grid) == 0 {
 		total_cells := s.width * s.height
+		blank := blank_glyph(s)
 
 		new_grid := make([dynamic]Glyph, total_cells)
 		new_alt_grid := make([dynamic]Glyph, total_cells)
 		new_dirty := make([dynamic]bool, s.height)
+
+		for i in 0 ..< total_cells {
+			new_grid[i] = blank
+			new_alt_grid[i] = blank
+		}
 
 		if len(s.grid) > 0 {
 			min_h := min(old_h, s.height)
