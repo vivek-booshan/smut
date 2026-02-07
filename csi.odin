@@ -3,20 +3,43 @@ package smut
 SCROLLUP :: 64
 SCROLLDOWN :: 65
 
-ansi_parser :: proc(s: ^Screen) -> (int, [8]int) {
-	params: [8]int // Standard ANSI usually needs no more than 2-3
+MAX_PARAMS :: 16
+
+SGR_Code :: enum int {
+	RESET          = 0,
+	BOLD           = 1,
+	FAINT          = 2,
+	ITALIC         = 3,
+	UNDERLINE      = 4,
+	BLINK          = 5,
+	REVERSE        = 7,
+	INVISIBLE      = 8,
+	STRIKE         = 9,
+	NORMAL_WEIGHT  = 22,
+	NOT_ITALIC     = 23,
+	NOT_UNDERLINED = 24,
+	NOT_BLINKING   = 25,
+	NOT_REVERSED   = 27,
+	NOT_INVISIBLE  = 28,
+	NOT_STRUCK     = 29,
+	FG_EXTENDED    = 38,
+	FG_DEFAULT     = 39,
+	BG_EXTENDED    = 48,
+	BG_DEFAULT     = 49,
+}
+
+ansi_parser :: proc(s: ^Screen) -> (int, [MAX_PARAMS]int) {
+	params: [MAX_PARAMS]int
 	p_idx := 0
 	current_val := 0
 	has_val := false
 
-	// 1. Minimalist Parameter Parser
-	// We parse the buffer we collected in the CSI state (e.g., "10;20")
 	for i in 0 ..< s.ansi_idx {
 		char := s.ansi_buf[i]
 		if char >= '0' && char <= '9' {
 			current_val = (current_val * 10) + int(char - '0')
 			has_val = true
-		} else if char == ';' {
+		} else if char == ';' || char == ':' {
 			if p_idx < len(params) {
 				params[p_idx] = current_val
 				p_idx += 1
@@ -33,7 +56,6 @@ ansi_parser :: proc(s: ^Screen) -> (int, [8]int) {
 	}
 
 	return p_idx, params
-
 }
 
 handle_csi_sequence :: proc(s: ^Screen, b: u8) {
@@ -157,7 +179,8 @@ handle_csi_sequence :: proc(s: ^Screen, b: u8) {
 	s.pty_cursor_y = s.cursor_y
 }
 
-handle_sgr_sequence :: proc(s: ^Screen, p_idx: int, params: [8]int) {
+
+handle_sgr_sequence :: proc(s: ^Screen, p_idx: int, params: [MAX_PARAMS]int) {
 	if p_idx == 0 {
 		reset_attr(s)
 		return
@@ -167,56 +190,104 @@ handle_sgr_sequence :: proc(s: ^Screen, p_idx: int, params: [8]int) {
 	for i < p_idx {
 		val := params[i]
 
+		// Handle Offset-based colors first
 		switch val {
-		case 0:
-			reset_attr(s)
-		case 1:
-			s.current_attr.mode += {.Bold}
-		case 4:
-			s.current_attr.mode += {.Underline}
-		case 7:
-			s.current_attr.mode += {.Reverse}
-
-		// Standard Foreground (30-37, 90-97)
 		case 30 ..= 37:
 			s.current_attr.fg = u32(val - 30)
+			s.current_attr.mode -= {.TrueColorFG}
+			i += 1
+			continue
 		case 90 ..= 97:
 			s.current_attr.fg = u32(val - 90 + 8)
-
-		// Extended Foreground
-		case 38:
+			s.current_attr.mode -= {.TrueColorFG}
 			i += 1
-			if i >= p_idx do break
-			if params[i] == 5 && i + 1 < p_idx { 	// 256 Color
-				s.current_attr.fg = u32(params[i + 1])
-				i += 1
-			} else if params[i] == 2 && i + 3 < p_idx { 	// TrueColor (RGB)
-				// st often packs RGB into a 32-bit int: 0xRRGGBB
-				r, g, b := u32(params[i + 1]), u32(params[i + 2]), u32(params[i + 3])
-				s.current_attr.fg = (r << 16) | (g << 8) | b
-				s.current_attr.mode += {.TrueColorFG} // Flag to tell drawer to use RGB
-				i += 3
-			}
-
-		// Standard Background (40-47, 100-107)
+			continue
 		case 40 ..= 47:
 			s.current_attr.bg = u32(val - 40)
+			s.current_attr.mode -= {.TrueColorBG}
+			i += 1
+			continue
 		case 100 ..= 107:
 			s.current_attr.bg = u32(val - 100 + 8)
-
-		// Extended Background
-		case 48:
+			s.current_attr.mode -= {.TrueColorBG}
 			i += 1
-			if i >= p_idx do break
-			if params[i] == 5 && i + 1 < p_idx {
-				s.current_attr.bg = u32(params[i + 1])
-				i += 1
-			} else if params[i] == 2 && i + 3 < p_idx {
-				r, g, b := u32(params[i + 1]), u32(params[i + 2]), u32(params[i + 3])
-				s.current_attr.bg = (r << 16) | (g << 8) | b
-				s.current_attr.mode += {.TrueColorBG}
-				i += 3
+			continue
+		}
+
+		// Handle named SGR codes
+		code := SGR_Code(val)
+		switch code {
+		case .RESET:
+			reset_attr(s)
+		case .BOLD:
+			s.current_attr.mode += {.Bold}
+		case .FAINT:
+			s.current_attr.mode += {.Faint}
+		case .ITALIC:
+			s.current_attr.mode += {.Italic}
+		case .UNDERLINE:
+			s.current_attr.mode += {.Underline}
+		case .BLINK:
+			s.current_attr.mode += {.Blink}
+		case .REVERSE:
+			s.current_attr.mode += {.Reverse}
+		case .INVISIBLE:
+			s.current_attr.mode += {.Invisible}
+		case .STRIKE:
+			s.current_attr.mode += {.StrikeThrough}
+
+		case .NORMAL_WEIGHT:
+			s.current_attr.mode -= {.Bold, .Faint}
+		case .NOT_ITALIC:
+			s.current_attr.mode -= {.Italic}
+		case .NOT_UNDERLINED:
+			s.current_attr.mode -= {.Underline}
+		case .NOT_BLINKING:
+			s.current_attr.mode -= {.Blink}
+		case .NOT_REVERSED:
+			s.current_attr.mode -= {.Reverse}
+		case .NOT_INVISIBLE:
+			s.current_attr.mode -= {.Invisible}
+		case .NOT_STRUCK:
+			s.current_attr.mode -= {.StrikeThrough}
+
+		case .FG_EXTENDED:
+			i += 1
+			if i < p_idx {
+				if params[i] == 5 && i + 1 < p_idx {
+					s.current_attr.fg = u32(params[i + 1])
+					s.current_attr.mode -= {.TrueColorFG}
+					i += 1
+				} else if params[i] == 2 && i + 3 < p_idx {
+					r, g, b := u32(params[i + 1]), u32(params[i + 2]), u32(params[i + 3])
+					s.current_attr.fg = (r << 16) | (g << 8) | b
+					s.current_attr.mode += {.TrueColorFG}
+					i += 3
+				}
 			}
+
+		case .FG_DEFAULT:
+			s.current_attr.fg = DEFAULT_FG
+			s.current_attr.mode -= {.TrueColorFG}
+
+		case .BG_EXTENDED:
+			i += 1
+			if i < p_idx {
+				if params[i] == 5 && i + 1 < p_idx {
+					s.current_attr.bg = u32(params[i + 1])
+					s.current_attr.mode -= {.TrueColorBG}
+					i += 1
+				} else if params[i] == 2 && i + 3 < p_idx {
+					r, g, b := u32(params[i + 1]), u32(params[i + 2]), u32(params[i + 3])
+					s.current_attr.bg = (r << 16) | (g << 8) | b
+					s.current_attr.mode += {.TrueColorBG}
+					i += 3
+				}
+			}
+
+		case .BG_DEFAULT:
+			s.current_attr.bg = DEFAULT_BG
+			s.current_attr.mode -= {.TrueColorBG}
 		}
 		i += 1
 	}
