@@ -79,6 +79,8 @@ main :: proc() {
 	running := true
 
 	posix.fcntl(master_fd, .SETFL, posix.O_NONBLOCK)
+
+	init_cursor(&screen)
 	for running {
 		if should_resize {
 			should_resize = false
@@ -96,11 +98,12 @@ main :: proc() {
 			continue
 		}
 
+		ui_changed: bool
 		user_input := .IN in fds[0].revents
 		if user_input {
 			n := posix.read(posix.STDIN_FILENO, &buf[0], len(buf))
 			if n > 0 {
-				handle_input(buf[:n], master_fd)
+				ui_changed = handle_input(buf[:n], master_fd)
 			}
 		}
 
@@ -111,6 +114,11 @@ main :: proc() {
 				n := posix.read(master_fd, &buf[0], len(buf))
 				if n > 0 {
 					process_output(&screen, buf[:n])
+
+					if len(screen.reply_buf) > 0 {
+						posix.write(master_fd, &screen.reply_buf[0], len(screen.reply_buf))
+						clear(&screen.reply_buf)
+					}
 					pty_activity = true
 				} else {
 					// End of stream or EWOULDBLOCK
@@ -120,7 +128,7 @@ main :: proc() {
 			}
 		}
 		// draw_screen()
-		if pty_activity || should_resize do draw_screen()
+		if pty_activity || ui_changed || should_resize do draw_screen()
 	}
 }
 
@@ -182,5 +190,10 @@ glyph_to_rune :: proc(a: []Glyph) -> []rune {
 	}
 
 	return b[:]
+}
+
+init_cursor :: proc(s: ^Screen) {
+	screen.cursor_visible = true
+	screen.cursor_style = 2
 }
 
