@@ -9,6 +9,9 @@ package smut
 // NOTE(Vivek): ptnl pty discrepency --> cursor / gutter highlight drift
 // TODO(Vivek): sync height constants
 
+// NOTE(Vivek): Resizing when in history causes crash
+// NOTE(Vivek): Resizing in motion moves pty to cursor loc
+
 import "core:fmt"
 import "core:strings"
 import "core:sys/darwin"
