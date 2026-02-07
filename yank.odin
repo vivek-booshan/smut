@@ -71,6 +71,8 @@ dispatch_to_system_clipboard :: proc(text: string) {
 	}
 }
 
+// NOTE(Vivek): Not safe and needs to be reimplemented in future with safer method. 
+// Also technically slow as it needs to spawn a shell for cat
 spawn_clipboard_pipe :: proc(method: string, input: string) {
 	pid := posix.getpid()
 	path := fmt.tprintf("/tmp/smut_yank_%d.txt", pid)
