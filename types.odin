@@ -8,18 +8,14 @@ CONTROLC0 :: 32
 DEL :: 127
 BEL :: '\a'
 TAB :: '\t'
-LF :: '\n' // new line / line feed
-CR :: '\r' // carriage return
-ESC :: '\e' // 27
+LF :: '\n'
+CR :: '\r'
+ESC :: '\e'
 BACKSPACE :: 8
-CUP :: 0x48 // cursor up
-ED :: 0x4a // Erase in Display
-SGR :: 0x6D // Set Graphic Rendition
-SM :: 0x68 // Set Mode
 
 Key :: enum u8 {
 	NONE      = 0,
-	LEADER    = 1, // ctrl a; ctrl b = 2
+	LEADER    = 1, // ctrl a
 	BACKSPACE = 8,
 	TAB       = 9,
 	ENTER     = 13,
@@ -30,11 +26,19 @@ Key :: enum u8 {
 
 AnsiState :: enum {
 	Ground,
-	Escape, // After ESC
-	CSI, // After ESC [
-	STR, // After ESC ] (OSC), ESC P (DCS), ESC ^ (PM), ESC _ (APC)
-	Charset, // After ESC ( or ESC )
-	Esc_Test, // After ESC #
+	Escape,
+	Escape_Intermediate,
+	CSI_Entry,
+	CSI_Param,
+	CSI_Intermediate,
+	CSI_Ignore,
+	DCS_Entry,
+	DCS_Param,
+	DCS_Intermediate,
+	DCS_Passthrough,
+	DCS_Ignore,
+	OSC_String,
+	SOS_PM_APC_String,
 }
 
 Mode :: enum {
@@ -97,15 +101,18 @@ Screen :: struct {
 	scroll_offset:        int,
 	total_lines_scrolled: int,
 
-	// ANSI State Machine
+	// --- PARSER STATE ---
 	ansi_state:           AnsiState,
-	ansi_buf:             [64]u8,
-	ansi_idx:             int,
+	parser_params:        [dynamic]int,
+	parser_current_param: int,
+	parser_has_param:     bool,
+	parser_private:       rune, // stores '?' or '<' etc
+	parser_intermediate:  rune, // stores '!' or '$' etc
 
-	// String Buffer for OSC/DCS Sequences
-	str_buf:              [256]rune,
-	str_idx:              int,
-	str_type:             rune,
+	// Buffers
+	utf8_buf:             [4]u8,
+	utf8_len:             int,
+	osc_buf:              [dynamic]u8,
 
 	// ALTERNATE SCREEN BUFFER
 	in_alt_screen:        bool,
