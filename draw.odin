@@ -215,26 +215,31 @@ draw_screen :: proc(s: ^Screen, mgr: ^Manager) {
 }
 
 draw_status_bar :: proc(b: ^strings.Builder, s: ^Screen, mgr: ^Manager) {
-	c, n: string
+	col, name: string
+
 	switch s.mode {
-	case .Insert:
-		c, n = "\x1b[30;44m", " INS "
 	case .Motion:
-		c, n = "\x1b[30;42m", " MOT "
-	case .Visual:
-		c, n = "\x1b[30;45m", " VIS "
+		col, name = "\x1b[30;42m", " MOT "
 	case .Switch:
-		c, n = "\x1b[30;43m", " CMD "
+		col, name = "\x1b[30;47m", " CMD "
+	case .Insert:
+		col, name = "\x1b[37;44m", " INS "
+	case .Visual:
+		col, name = "\x1b[30;45m", " VIS "
 	}
-	fmt.sbprint(b, c, n, "\x1b[0m ")
+
+	fmt.sbprint(b, col)
+	fmt.sbprint(b, name)
+	fmt.sbprint(b, "\x1b[0m ")
 
 	for t, i in mgr.tabs {
 		if i == mgr.active {
-			fmt.sbprintf(b, "\x1b[7m %d:%s \x1b[0m ", i + 1, t.title)
+			fmt.sbprintf(b, "\x1b[7;1m %d \x1b[0m ", i + 1)
 		} else {
-			fmt.sbprintf(b, "\x1b[90m %d:%s \x1b[0m ", i + 1, t.title)
+			fmt.sbprintf(b, "\x1b[90m %d \x1b[0m ", i + 1)
 		}
 	}
+
 	fmt.sbprint(b, "\x1b[K")
 }
 
