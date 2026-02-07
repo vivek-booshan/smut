@@ -11,10 +11,23 @@ TIOCSWINSZ :: 0x80087467 when ODIN_OS == .Darwin else 0x5414
 TIOCSCTTY :: 0x20007461 when ODIN_OS == .Darwin else 0x540E
 SIGWINCH :: 28
 
+Tab :: struct {
+	fd:     posix.FD,
+	pid:    posix.pid_t,
+	screen: ^Screen,
+	title:  string,
+}
+
+Manager :: struct {
+	tabs:   [dynamic]Tab,
+	active: int,
+}
+
 foreign import libc "system:c"
 foreign libc {
 	signal :: proc(sig: i32, handler: rawptr) -> rawptr ---
 }
+
 manager: Manager
 should_resize := true
 
@@ -32,7 +45,7 @@ main :: proc() {
 	buf: [65336]byte
 	running := true
 
-	for running && len(manager.tabs) > 0 {
+	loop: for running && len(manager.tabs) > 0 {
 		active := &manager.tabs[manager.active]
 
 		if should_resize {
@@ -41,53 +54,59 @@ main :: proc() {
 			fmt.print("\x1b[2J")
 		}
 
-		// 1. Build PollFDs (Snapshot of current state)
 		fds := make([dynamic]posix.pollfd, context.temp_allocator)
 		append(&fds, posix.pollfd{fd = posix.STDIN_FILENO, events = {.IN}})
 		for t in manager.tabs {
 			append(&fds, posix.pollfd{fd = t.fd, events = {.IN, .HUP, .ERR}})
 		}
 
-		// 2. Poll
 		if posix.poll(raw_data(fds), cast(u32)len(fds), -1) < 0 do continue
 
 		ui_dirty := false
 
-		// 3. Handle STDIN (User Input) - May modify manager.tabs (add tabs)
 		if .IN in fds[0].revents {
 			n := posix.read(posix.STDIN_FILENO, &buf[0], len(buf))
 			if n > 0 {
 				act := handle_input(active.screen, buf[:n], active.fd)
-				switch act {
+				#partial switch act {
 				case .None:
 				case .Redraw:
 					ui_dirty = true
 				case .CreateTab:
-					spawn_tab(&manager);ui_dirty = true
+					spawn_tab(&manager)
+					ui_dirty = true
+					continue loop
 				case .NextTab:
 					manager.active = (manager.active + 1) % len(manager.tabs)
-					should_resize = true
+					ui_dirty = true
 				case .PrevTab:
 					manager.active = (manager.active - 1 + len(manager.tabs)) % len(manager.tabs)
-					should_resize = true
+					ui_dirty = true
+				case .CloseTab:
+					close_tab(&manager, manager.active)
+					ui_dirty = true
+					if len(manager.tabs) == 0 do break loop
 				case .Quit:
 					running = false
 				}
 			}
 		}
 
-		// 4. Handle PTYs (Background & Active)
-		// CRITICAL FIX: Only iterate over tabs that existed when fds was built.
-		// fds[0] is STDIN, so fds[1..] correspond to tabs[0..]
-		tabs_polled := len(fds) - 1
+		if len(manager.tabs) == 0 do break loop
+		active = &manager.tabs[manager.active]
 
+		tabs_polled := len(fds) - 1
 		for i := tabs_polled - 1; i >= 0; i -= 1 {
+
+			if i >= len(manager.tabs) do continue
+
 			revents := fds[i + 1].revents
 			t := &manager.tabs[i]
 
 			if .HUP in revents || .ERR in revents {
 				close_tab(&manager, i)
 				should_resize = true
+				ui_dirty = true
 				continue
 			}
 
@@ -105,6 +124,7 @@ main :: proc() {
 				} else {
 					close_tab(&manager, i)
 					should_resize = true
+					ui_dirty = true
 				}
 			}
 		}
@@ -115,42 +135,6 @@ main :: proc() {
 	}
 }
 
-spawn_tab :: proc(mgr: ^Manager) -> bool {
-	master, slave: posix.FD
-	if openpty(&master, &slave) != 0 do return false
-
-	pid := posix.fork()
-	if pid == 0 {
-		posix.close(master)
-		login_tty(slave)
-		shell := os.get_env("SHELL")
-		if shell == "" do shell = "/bin/sh"
-		cpath := strings.clone_to_cstring(shell)
-		cname := strings.clone_to_cstring(filepath.base(shell))
-		posix.execl(cpath, cname, nil)
-		posix.exit(1)
-	}
-
-	posix.close(slave)
-	posix.fcntl(master, .SETFL, posix.O_NONBLOCK)
-
-	s := new(Screen)
-	s.width, s.height = 80, 24
-	init_cursor(s)
-
-	append(&mgr.tabs, Tab{fd = master, pid = pid, screen = s, title = "shell"})
-	mgr.active = len(mgr.tabs) - 1
-	resize_screen(s, master)
-	return true
-}
-
-close_tab :: proc(mgr: ^Manager, idx: int) {
-	if idx < 0 || idx >= len(mgr.tabs) do return
-	t := mgr.tabs[idx]
-	posix.close(t.fd)
-	ordered_remove(&mgr.tabs, idx)
-	if mgr.active >= len(mgr.tabs) do mgr.active = max(0, len(mgr.tabs) - 1)
-}
 
 setup_terminal :: proc() {
 	t: posix.termios
@@ -174,15 +158,15 @@ handle_winch :: proc "c" (sig: i32) {
 	should_resize = true
 }
 
-openpty :: proc(amaster, aslave: ^posix.FD) -> int {
-	master, err := os.open("/dev/ptmx", os.O_RDWR | os.O_NOCTTY)
+openpty :: proc(adom, asub: ^posix.FD) -> int {
+	dom, err := os.open("/dev/ptmx", os.O_RDWR | os.O_NOCTTY)
 	if err != nil do return -1
-	if posix.grantpt(cast(posix.FD)master) != .OK do return -1
-	if posix.unlockpt(cast(posix.FD)master) != .OK do return -1
-	slave_name := posix.ptsname(cast(posix.FD)master)
-	slave, err_s := os.open(cast(string)slave_name, os.O_RDWR | os.O_NOCTTY)
+	if posix.grantpt(cast(posix.FD)dom) != .OK do return -1
+	if posix.unlockpt(cast(posix.FD)dom) != .OK do return -1
+	sub_name := posix.ptsname(cast(posix.FD)dom)
+	sub, err_s := os.open(cast(string)sub_name, os.O_RDWR | os.O_NOCTTY)
 	if err_s != nil do return -1
-	amaster^, aslave^ = cast(posix.FD)master, cast(posix.FD)slave
+	adom^, asub^ = cast(posix.FD)dom, cast(posix.FD)sub
 	return 0
 }
 
@@ -203,5 +187,42 @@ set_window_size :: proc(fd: posix.FD, cols, rows: int) {
 init_cursor :: proc(s: ^Screen) {
 	s.cursor_visible = true
 	s.cursor_style = 2
+}
+
+spawn_tab :: proc(mgr: ^Manager) -> bool {
+	dom, sub: posix.FD
+	if openpty(&dom, &sub) != 0 do return false
+
+	pid := posix.fork()
+	if pid == 0 {
+		posix.close(dom)
+		login_tty(sub)
+		shell := os.get_env("SHELL")
+		if shell == "" do shell = "/bin/sh"
+		cpath := strings.clone_to_cstring(shell)
+		cname := strings.clone_to_cstring(filepath.base(shell))
+		posix.execl(cpath, cname, nil)
+		posix.exit(1)
+	}
+
+	posix.close(sub)
+	posix.fcntl(dom, .SETFL, posix.O_NONBLOCK)
+
+	s := new(Screen)
+	s.width, s.height = 80, 24
+	init_cursor(s)
+
+	append(&mgr.tabs, Tab{fd = dom, pid = pid, screen = s, title = "shell"})
+	mgr.active = len(mgr.tabs) - 1
+	resize_screen(s, dom)
+	return true
+}
+
+close_tab :: proc(mgr: ^Manager, idx: int) {
+	if idx < 0 || idx >= len(mgr.tabs) do return
+	t := mgr.tabs[idx]
+	posix.close(t.fd)
+	ordered_remove(&mgr.tabs, idx)
+	if mgr.active >= len(mgr.tabs) do mgr.active = max(0, len(mgr.tabs) - 1)
 }
 

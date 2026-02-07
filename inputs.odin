@@ -29,19 +29,10 @@ Motion :: enum u8 {
 	Leader     = 1,
 }
 
-CMD_PREV :: 'h'
-CMD_NEXT :: 'l'
-
 handle_input :: proc(s: ^Screen, input: []u8, fd: posix.FD) -> Action {
 	act := Action.None
 
 	for &b, i in input {
-		if b == KEY_ESC && i + 1 < len(input) {
-			next := input[i + 1]
-			if next == CMD_PREV do return .PrevTab
-			if next == CMD_NEXT do return .NextTab
-		}
-
 		key := Motion(b)
 
 		if key == .Leader {
@@ -73,12 +64,19 @@ handle_input :: proc(s: ^Screen, input: []u8, fd: posix.FD) -> Action {
 
 		switch s.mode {
 		case .Switch:
-			if b == 'c' {
+			#partial switch cast(Action)b {
+			case .Motion:
+				s.mode = .Motion
+			case .Visual:
+				s.mode = .Visual
+			case .Insert:
 				s.mode = .Insert
-				return .CreateTab
-			}
-			s.mode = .Insert
+			case .CreateTab, .CloseTab, .Redraw, .Quit:
+				fallthrough
+			case .NextTab, .PrevTab:
+				return cast(Action)b
 
+			}
 		case .Motion, .Visual:
 			buffer_key(s, rune(b))
 			count := parse_count(s)

@@ -1,7 +1,5 @@
 package smut
 
-import "core:sys/posix"
-
 GUTTER_W :: 5
 
 KEY_ESC :: 27
@@ -9,23 +7,15 @@ KEY_LEADER :: 1
 
 Action :: enum {
 	None,
-	Redraw,
-	CreateTab,
-	NextTab,
-	PrevTab,
-	Quit,
-}
-
-Tab :: struct {
-	fd:     posix.FD,
-	pid:    posix.pid_t,
-	screen: ^Screen,
-	title:  string,
-}
-
-Manager :: struct {
-	tabs:   [dynamic]Tab,
-	active: int,
+	CreateTab = 'c',
+	NextTab = 'l',
+	PrevTab = 'h',
+	CloseTab = 'q',
+	Redraw = 'R',
+	Quit = 'Q',
+	Insert = 'i',
+	Motion = 'n',
+	Visual = 's',
 }
 
 AnsiState :: enum {
