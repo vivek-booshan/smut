@@ -20,8 +20,7 @@ Motion :: enum u8 {
 	FindBack   = 'F',
 	TillFwd    = 't',
 	TillBack   = 'T',
-	Visual     = 's',
-	Motion     = 'm',
+	Visual     = 'v',
 	VisualLine = 'V',
 	Yank       = 'y',
 	Goto       = 'g',
@@ -30,324 +29,149 @@ Motion :: enum u8 {
 	Leader     = 1,
 }
 
-Class :: enum {
-	Space,
-	Alnum,
-	Symbol,
-}
+CMD_PREV :: 'h'
+CMD_NEXT :: 'l'
 
-classify :: proc(r: rune, big: bool) -> Class {
-	if r <= 32 do return .Space
-	if big do return .Alnum
-
-	is_alnum :=
-		(r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_'
-
-	if is_alnum do return .Alnum
-	return .Symbol
-}
-
-handle_input :: proc(input: []u8, fd: posix.FD) -> bool {
-	dirty := false
+handle_input :: proc(s: ^Screen, input: []u8, fd: posix.FD) -> Action {
+	act := Action.None
 
 	for &b, i in input {
+		if b == KEY_ESC && i + 1 < len(input) {
+			next := input[i + 1]
+			if next == CMD_PREV do return .PrevTab
+			if next == CMD_NEXT do return .NextTab
+		}
+
 		key := Motion(b)
 
 		if key == .Leader {
-			screen.mode = .Switch
-			screen.cmd_idx = 0
-			dirty = true
+			s.mode = .Switch
+			s.cmd_idx = 0
+			act = .Redraw
 			continue
 		}
 
-		if screen.mode == .Insert {
+		if s.mode == .Insert {
 			posix.write(fd, &b, 1)
 			continue
 		}
 
 		if key == .Esc {
-			if screen.in_alt_screen do break
-			if !screen.in_alt_screen {
-				process_output(&screen, input[i:i + 1])
+			if s.in_alt_screen do break
+			if !s.in_alt_screen {
+				process_output(s, input[i:i + 1], fd)
 				continue
 			}
 		}
 
-		if screen.ansi_state != .Ground {
-			handle_ansi_byte(&screen, b)
+		if s.ansi_state != .Ground {
+			handle_ansi_byte(s, b, fd)
 			continue
 		}
 
-		dirty = true
+		act = .Redraw
 
-		switch screen.mode {
+		switch s.mode {
 		case .Switch:
-			buffer_key(rune(b))
-			handle_switch(key)
+			if b == 'c' {
+				s.mode = .Insert
+				return .CreateTab
+			}
+			s.mode = .Insert
+
 		case .Motion, .Visual:
-			buffer_key(rune(b))
-			count := parse_count()
-			handle_motion(key, count)
+			buffer_key(s, rune(b))
+			count := parse_count(s)
+			handle_motion(s, key, count)
+
 		case .Insert:
 			posix.write(fd, &b, 1)
 		}
 	}
-	return dirty
+	return act
 }
 
-handle_switch :: proc(m: Motion) -> bool {
-	#partial switch m {
-	case .Insert:
-		screen.mode = .Insert
-		screen.scroll_offset = 0
-		screen.cursor_x = screen.pty_cursor_x
-		screen.cursor_y = screen.pty_cursor_y
-		screen.is_selecting = false
-		screen.cmd_idx = 0
-	case .Visual:
-		screen.mode = .Visual
-		screen.is_selecting = true
-		screen.selection_start_x = screen.cursor_x
-		screen.selection_start_y = screen.cursor_y
-	case .Motion:
-		screen.mode = .Motion
-	case:
-		return false
-	}
-	return true
-}
-
-handle_motion :: proc(m: Motion, count: int) -> bool {
+handle_motion :: proc(s: ^Screen, m: Motion, count: int) {
 	ok := true
-	h := max(1, (screen.height - 1) / 2)
+	h := max(1, (s.height - 1) / 2)
 
 	#partial switch m {
 	case .Down:
-		move_vert(count)
+		move_vert(s, count)
 	case .Up:
-		move_vert(-count)
+		move_vert(s, -count)
 	case .HalfPgDn:
-		move_vert(h * count)
+		move_vert(s, h * count)
 	case .HalfPgUp:
-		move_vert(-(h * count))
+		move_vert(s, -(h * count))
 	case .Left:
-		screen.cursor_x = max(0, screen.cursor_x - count)
+		s.cursor_x = max(0, s.cursor_x - count)
 	case .Right:
-		screen.cursor_x = min(screen.width - 1, screen.cursor_x + count)
+		s.cursor_x = min(s.width - 1, s.cursor_x + count)
 
-	case .WordBack, .WORDBack:
-		for _ in 0 ..< count do step_back(m == .WORDBack)
-	case .WordEnd, .WORDEnd:
-		for _ in 0 ..< count do step_end(m == .WORDEnd)
-
-	case .FindFwd, .FindBack, .TillFwd, .TillBack:
-		return true
-
-	// case .Visual:
-	// 	if screen.mode != .Visual {
-	// 		screen.mode = .Visual
-	// 		screen.is_selecting = true
-	// 		screen.selection_start_x = screen.cursor_x
-	// 		screen.selection_start_y = screen.cursor_y
-	// 	} else {
-	// 		screen.mode = .Motion
-	// 		screen.is_selecting = false
-	// 	}
+	case .Visual:
+		if s.mode != .Visual {
+			s.mode = .Visual
+			s.is_selecting = true
+			s.selection_start_x = s.cursor_x
+			s.selection_start_y = s.cursor_y
+		} else {
+			s.mode = .Motion
+			s.is_selecting = false
+		}
 
 	case .Yank:
-		if screen.is_selecting {
-			yank_selection(&screen)
-			screen.is_selecting = false
-			screen.mode = .Motion
+		if s.is_selecting {
+			yank_selection(s)
+			s.is_selecting = false
+			s.mode = .Motion
 		}
 
 	case .Goto:
-		screen.scroll_offset = 0
-		screen.cursor_x = screen.pty_cursor_x
-		screen.cursor_y = screen.pty_cursor_y
+		s.scroll_offset = 0
+		s.cursor_x = s.pty_cursor_x
+		s.cursor_y = s.pty_cursor_y
 	case .Esc:
-		screen.is_selecting = false
-		screen.mode = .Motion
+		s.is_selecting = false
+		s.mode = .Motion
 	case:
-		ok = try_complete_search(u8(m), count)
+		ok = false
 	}
 
-	if ok do screen.cmd_idx = 0
-	return ok
+	if ok do s.cmd_idx = 0
 }
 
-// ... include move_vert, step_back, step_end, etc from previous response ...
-move_vert :: proc(n: int) {
-	dest := screen.cursor_y + n
+move_vert :: proc(s: ^Screen, n: int) {
+	dest := s.cursor_y + n
 	if n > 0 {
-		if dest <= screen.pty_cursor_y {
-			screen.cursor_y = dest
+		if dest <= s.pty_cursor_y {
+			s.cursor_y = dest
 		} else {
-			screen.cursor_y = screen.pty_cursor_y
-			screen.scroll_offset = max(0, screen.scroll_offset - n)
+			s.cursor_y = s.pty_cursor_y
+			s.scroll_offset = max(0, s.scroll_offset - n)
 		}
 	} else {
 		if dest >= 0 {
-			screen.cursor_y = dest
+			s.cursor_y = dest
 		} else {
-			screen.cursor_y = 0
-			limit := len(screen.scrollback)
-			screen.scroll_offset = min(limit, screen.scroll_offset - n)
+			s.cursor_y = 0
+			limit := len(s.scrollback)
+			s.scroll_offset = min(limit, s.scroll_offset - n)
 		}
 	}
 }
 
-step_back :: proc(big: bool) {
-	w := max(1, screen.width - GUTTER_W)
-	x, y := screen.cursor_x, screen.cursor_y
-
-	dec := proc(px, py, w: int) -> (int, int) {
-		nx := px - 1
-		if nx < 0 {
-			return w - 1, py - 1
-		}
-		return nx, py
-	}
-
-	x, y = dec(x, y, w)
-	if y < 0 {
-		screen.cursor_x, screen.cursor_y = 0, 0
-		return
-	}
-
-	for y >= 0 && classify(glyph_at(x, y), big) == .Space {
-		x, y = dec(x, y, w)
-	}
-	if y < 0 {
-		screen.cursor_x, screen.cursor_y = 0, 0
-		return
-	}
-
-	kind := classify(glyph_at(x, y), big)
-	for {
-		nx, ny := dec(x, y, w)
-		if ny < 0 || classify(glyph_at(nx, ny), big) != kind {
-			break
-		}
-		x, y = nx, ny
-	}
-
-	screen.cursor_x = x
-	screen.cursor_y = max(0, y)
-}
-
-step_end :: proc(big: bool) {
-	w := max(1, screen.width - GUTTER_W)
-	x, y := screen.cursor_x, screen.cursor_y
-	lim := screen.pty_cursor_y
-
-	inc :: proc(px, py, w: int) -> (int, int) {
-		nx := px + 1
-		if nx >= w {
-			return 0, py + 1
-		}
-		return nx, py
-	}
-
-	x, y = inc(x, y, w)
-	if y > lim {
-		return
-	}
-
-	for y <= lim && classify(glyph_at(x, y), big) == .Space {
-		x, y = inc(x, y, w)
-	}
-	if y > lim {
-		screen.cursor_x, screen.cursor_y = w - 1, lim
-		return
-	}
-
-	kind := classify(glyph_at(x, y), big)
-	for {
-		nx, ny := inc(x, y, w)
-		if ny > lim || classify(glyph_at(nx, ny), big) != kind {
-			break
-		}
-		x, y = nx, ny
-	}
-
-	screen.cursor_x = x
-	screen.cursor_y = y
-}
-
-try_complete_search :: proc(char: u8, count: int) -> bool {
-	if screen.cmd_idx < 2 do return false
-
-	prev := Motion(screen.cmd_buf[screen.cmd_idx - 2])
-	target := rune(char)
-	w := max(1, screen.width - GUTTER_W)
-	y := screen.cursor_y
-	x := screen.cursor_x
-	hits := 0
-
-	#partial switch prev {
-	case .FindFwd:
-		for i in x + 1 ..< w {
-			if screen.grid[y * screen.width + i].char == target {
-				hits += 1
-				if hits == count {
-					screen.cursor_x = i
-					return true
-				}
-			}
-		}
-	case .TillFwd:
-		for i in x + 1 ..< w {
-			if screen.grid[y * screen.width + i].char == target {
-				hits += 1
-				if hits == count {
-					screen.cursor_x = i - 1
-					return true
-				}
-			}
-		}
-	case .FindBack:
-		for i := x - 1; i >= 0; i -= 1 {
-			if screen.grid[y * screen.width + i].char == target {
-				hits += 1
-				if hits == count {
-					screen.cursor_x = i
-					return true
-				}
-			}
-		}
-	case .TillBack:
-		for i := x - 1; i >= 0; i -= 1 {
-			if screen.grid[y * screen.width + i].char == target {
-				hits += 1
-				if hits == count {
-					screen.cursor_x = i + 1
-					return true
-				}
-			}
-		}
-	case:
-		return false
-	}
-
-	return true
-}
-
-glyph_at :: proc(x, y: int) -> rune {
-	return screen.grid[y * screen.width + x].char
-}
-
-buffer_key :: proc(r: rune) {
-	if screen.cmd_idx < len(screen.cmd_buf) {
-		screen.cmd_buf[screen.cmd_idx] = r
-		screen.cmd_idx += 1
+buffer_key :: proc(s: ^Screen, r: rune) {
+	if s.cmd_idx < len(s.cmd_buf) {
+		s.cmd_buf[s.cmd_idx] = r
+		s.cmd_idx += 1
 	}
 }
 
-parse_count :: proc() -> int {
+parse_count :: proc(s: ^Screen) -> int {
 	len := 0
-	for i in 0 ..< screen.cmd_idx {
-		if screen.cmd_buf[i] >= '0' && screen.cmd_buf[i] <= '9' {
+	for i in 0 ..< s.cmd_idx {
+		if s.cmd_buf[i] >= '0' && s.cmd_buf[i] <= '9' {
 			len += 1
 		} else {
 			break
@@ -355,7 +179,7 @@ parse_count :: proc() -> int {
 	}
 
 	if len > 0 {
-		if v, ok := strconv.parse_int(utf8.runes_to_string(screen.cmd_buf[:len])); ok {
+		if v, ok := strconv.parse_int(utf8.runes_to_string(s.cmd_buf[:len])); ok {
 			return v
 		}
 	}

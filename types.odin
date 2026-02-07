@@ -4,15 +4,28 @@ import "core:sys/posix"
 
 GUTTER_W :: 5
 
-Key :: enum u8 {
-	NONE      = 0,
-	LEADER    = 1,
-	BACKSPACE = 8,
-	TAB       = 9,
-	ENTER     = 13,
-	ESCAPE    = 27,
-	DELETE    = 127,
-	ESCSEQ    = 0x1b,
+KEY_ESC :: 27
+KEY_LEADER :: 1
+
+Action :: enum {
+	None,
+	Redraw,
+	CreateTab,
+	NextTab,
+	PrevTab,
+	Quit,
+}
+
+Tab :: struct {
+	fd:     posix.FD,
+	pid:    posix.pid_t,
+	screen: ^Screen,
+	title:  string,
+}
+
+Manager :: struct {
+	tabs:   [dynamic]Tab,
+	active: int,
 }
 
 AnsiState :: enum {
@@ -70,56 +83,35 @@ Screen :: struct {
 	height:               int,
 	cursor_x:             int,
 	cursor_y:             int,
-
-	// PTY State
-	main_cursor_x:        int,
-	main_cursor_y:        int,
-	scroll_top:           int,
-	scroll_bottom:        int,
 	pty_cursor_x:         int,
 	pty_cursor_y:         int,
+	scroll_top:           int,
+	scroll_bottom:        int,
 	mode:                 Mode,
-
-	// Selection
+	is_selecting:         bool,
 	selection_start_x:    int,
 	selection_start_y:    int,
-	is_selecting:         bool,
-
-	// Command State
 	cmd_buf:              [16]rune,
 	cmd_idx:              int,
-
-	// History
 	scrollback:           [dynamic][]Glyph,
 	scroll_offset:        int,
 	total_lines_scrolled: int,
-
-	// Parser
 	ansi_state:           AnsiState,
 	parser_params:        [dynamic]int,
 	parser_current_param: int,
 	parser_has_param:     bool,
 	parser_private:       rune,
 	parser_intermediate:  rune,
-
-	// Buffers
 	utf8_buf:             [4]u8,
 	utf8_len:             int,
 	osc_buf:              [dynamic]u8,
 	reply_buf:            [dynamic]u8,
-
-	// Alt Screen
 	in_alt_screen:        bool,
 	alt_grid:             [dynamic]Glyph,
-	alt_cursor_x:         int,
-	alt_cursor_y:         int,
-
-	// Cursor
+	main_cursor_x:        int,
+	main_cursor_y:        int,
+	current_attr:         Glyph,
 	cursor_style:         int,
 	cursor_visible:       bool,
-
-	// Stuff
-	resize:               bool,
-	current_attr:         Glyph,
 }
 

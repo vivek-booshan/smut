@@ -16,23 +16,14 @@ import "core:sys/posix"
 
 MAX_SCROLLBACK :: 8192
 
-LINE_FEED :: 'D'
-MOVE_CUP :: 'M'
-RESET :: 'c'
-INDEX :: 'D' // Line Feed
-REVERSE_INDEX :: 'M' // Move Cursor Up? It just works ig
-RIS :: 'c' // Reset to Initial State
-
 resize_screen :: proc(s: ^Screen, pty_fd: posix.FD) {
 	ws: struct {
 		r, c, x, y: u16,
 	}
-
 	old_w, old_h := s.width, s.height
 
 	if darwin.syscall_ioctl(posix.STDOUT_FILENO, darwin.TIOCGWINSZ, &ws) != -1 && ws.r > 0 {
-		s.width = int(ws.c)
-		s.height = int(ws.r)
+		s.width, s.height = int(ws.c), int(ws.r)
 	} else {
 		s.width, s.height = 80, 24
 	}
@@ -40,70 +31,55 @@ resize_screen :: proc(s: ^Screen, pty_fd: posix.FD) {
 	if old_w != s.width || old_h != s.height || len(s.grid) == 0 {
 		total_cells := s.width * s.height
 		blank := blank_glyph(s)
-
 		new_grid := make([dynamic]Glyph, total_cells)
-		new_alt_grid := make([dynamic]Glyph, total_cells)
+		new_alt := make([dynamic]Glyph, total_cells)
 		new_dirty := make([dynamic]bool, s.height)
 
 		for i in 0 ..< total_cells {
 			new_grid[i] = blank
-			new_alt_grid[i] = blank
+			new_alt[i] = blank
 		}
 
 		if len(s.grid) > 0 {
 			min_h := min(old_h, s.height)
 			min_w := min(old_w, s.width)
-
 			for y in 0 ..< min_h {
-				old_start := y * old_w
-				new_start := y * s.width
-
-				copy(new_grid[new_start:new_start + min_w], s.grid[old_start:old_start + min_w])
-				copy(
-					new_alt_grid[new_start:new_start + min_w],
-					s.alt_grid[old_start:old_start + min_w],
-				)
+				src := y * old_w
+				dst := y * s.width
+				copy(new_grid[dst:dst + min_w], s.grid[src:src + min_w])
+				copy(new_alt[dst:dst + min_w], s.alt_grid[src:src + min_w])
 			}
+			delete(s.grid)
+			delete(s.alt_grid)
+			delete(s.dirty)
 		}
 
-		delete(s.grid)
-		delete(s.alt_grid)
-		delete(s.dirty)
-
 		s.grid = new_grid
-		s.alt_grid = new_alt_grid
+		s.alt_grid = new_alt
 		s.dirty = new_dirty
-
-		// Reserve 1 line for Status Bar
 		s.cursor_x = clamp(s.cursor_x, 0, max(0, s.width - 1))
 		s.cursor_y = clamp(s.cursor_y, 0, max(0, s.height - 2))
 	}
 
-	for i in 0 ..< s.height {
-		if i < len(s.dirty) do s.dirty[i] = true
-	}
+	for i in 0 ..< s.height do if i < len(s.dirty) do s.dirty[i] = true
 
 	pty_w := s.in_alt_screen ? s.width : s.width - GUTTER_W
 	set_window_size(pty_fd, pty_w, s.height - 1)
 }
 
-process_output :: proc(s: ^Screen, data: []u8) {
-	for b in data {
-		handle_ansi_byte(s, b)
-	}
+process_output :: proc(s: ^Screen, data: []u8, fd: posix.FD) {
+	for b in data do handle_ansi_byte(s, b, fd)
 }
 
 write_rune_to_grid :: proc(s: ^Screen, b: rune, current_w: int) {
-	VIEW_LIMIT := s.height - 2
-
+	limit := s.height - 2
 	if s.pty_cursor_x >= current_w {
 		s.pty_cursor_x = 0
 		s.pty_cursor_y += 1
 		handle_scrolling(s)
 	}
-
-	if s.pty_cursor_y > VIEW_LIMIT {
-		s.pty_cursor_y = VIEW_LIMIT
+	if s.pty_cursor_y > limit {
+		s.pty_cursor_y = limit
 		handle_scrolling(s)
 	}
 
@@ -121,100 +97,188 @@ write_rune_to_grid :: proc(s: ^Screen, b: rune, current_w: int) {
 	s.cursor_y = s.pty_cursor_y
 }
 
-handle_scrollback :: proc(s: ^Screen) {
+handle_scrolling :: proc(s: ^Screen) {
+	limit :=
+		(s.scroll_bottom > 0 && s.scroll_bottom < s.height - 1) ? s.scroll_bottom : s.height - 2
+	if s.cursor_y <= limit do return
+
+	s.cursor_y = limit
 	if !s.in_alt_screen && s.scroll_top == 0 {
 		line := make([]Glyph, s.width)
 		copy(line, s.grid[0:s.width])
 		append(&s.scrollback, line)
 		s.total_lines_scrolled += 1
-
 		if len(s.scrollback) > MAX_SCROLLBACK {
 			delete(s.scrollback[0])
 			ordered_remove(&s.scrollback, 0)
-			if s.scroll_offset > 0 {
-				s.scroll_offset = min(s.scroll_offset, len(s.scrollback))
-			}
+			if s.scroll_offset > 0 do s.scroll_offset = min(s.scroll_offset, len(s.scrollback))
 		}
 	}
-}
 
-handle_scrolling :: proc(s: ^Screen) {
-	limit: int
-	if s.scroll_bottom > 0 && s.scroll_bottom < s.height - 1 {
-		limit = s.scroll_bottom
-	} else {
-		limit = s.height - 2
-	}
-
-	if s.cursor_y <= limit {
-		return
-	}
-
-	s.cursor_y = limit
-	handle_scrollback(s)
 	grid := s.in_alt_screen ? s.alt_grid : s.grid
-
 	dst_start := s.scroll_top * s.width
 	src_start := (s.scroll_top + 1) * s.width
-	len_bytes := (limit - s.scroll_top) * s.width
-
-	copy(grid[dst_start:], grid[src_start:src_start + len_bytes])
+	bytes := (limit - s.scroll_top) * s.width
+	copy(grid[dst_start:], grid[src_start:src_start + bytes])
 
 	clear_start := limit * s.width
-	for i in 0 ..< s.width {grid[clear_start + i] = blank_glyph(s)}
-
-	for i in s.scroll_top ..= limit {s.dirty[i] = true}
+	blank := blank_glyph(s)
+	for i in 0 ..< s.width do grid[clear_start + i] = blank
+	for i in s.scroll_top ..= limit do s.dirty[i] = true
 }
 
-get_row_data :: proc(abs_line: int) -> (row_data: []Glyph, is_history: bool) {
-	is_history = false
-	history_start := max(1, screen.total_lines_scrolled - len(screen.scrollback) + 1)
+draw_screen :: proc(s: ^Screen, mgr: ^Manager) {
+	b := strings.builder_make()
+	defer strings.builder_destroy(&b)
+	fmt.sbprint(&b, "\x1b[H\x1b[?25l")
 
-	if abs_line < history_start {
-		return nil, false
-	}
+	term_view_w := max(1, s.width - GUTTER_W)
 
-	if abs_line <= screen.total_lines_scrolled {
-		idx := abs_line - history_start
-		if idx >= 0 && idx < len(screen.scrollback) {
-			row_data = screen.scrollback[idx]
-			is_history = true
-		}
-	} else {
-		grid_y := abs_line - screen.total_lines_scrolled - 1
-		if grid_y >= 0 && grid_y < screen.height {
-			row_data = screen.grid[grid_y * screen.width:]
-		}
-	}
-	return row_data, is_history
-}
-
-within_selection :: proc(y: int) -> bool {
-	if !screen.is_selecting do return false
-	low := min(screen.selection_start_y, screen.cursor_y)
-	high := max(screen.selection_start_y, screen.cursor_y)
-	return y >= low && y <= high
-}
-
-draw_gutter :: proc(b: ^strings.Builder, y, abs_line, pty_cursor_y: int, is_history: bool) {
-	grid_y_live := abs_line - screen.total_lines_scrolled - 1
-
-	if is_history || (grid_y_live >= 0 && grid_y_live <= pty_cursor_y) {
-		width := GUTTER_W - 1
-		if y == screen.cursor_y {
-			fmt.sbprintf(b, "\x1b[33;49m%*d \x1b[0m", width, abs_line)
+	sy_min, sy_max, sx_start, sx_end := 0, 0, 0, 0
+	if s.is_selecting {
+		if s.selection_start_y < s.cursor_y {
+			sy_min, sy_max = s.selection_start_y, s.cursor_y
+			sx_start, sx_end = s.selection_start_x, s.cursor_x
+		} else if s.selection_start_y > s.cursor_y {
+			sy_min, sy_max = s.cursor_y, s.selection_start_y
+			sx_start, sx_end = s.cursor_x, s.selection_start_x
 		} else {
-			rel_num := abs(y - screen.cursor_y)
-			fmt.sbprintf(b, "\x1b[90;49m%*d \x1b[0m", width, rel_num)
+			sy_min, sy_max = s.cursor_y, s.cursor_y
+			sx_start = min(s.selection_start_x, s.cursor_x)
+			sx_end = max(s.selection_start_x, s.cursor_x)
+		}
+	}
+
+	for y in 0 ..< s.height - 1 {
+		abs_line := (s.total_lines_scrolled + y + 1) - s.scroll_offset
+		row: []Glyph
+		hist := false
+
+		if s.in_alt_screen {
+			start := y * s.width
+			if start < len(s.alt_grid) do row = s.alt_grid[start:start + s.width]
+		} else {
+			row, hist = get_row_data(s, abs_line)
+		}
+
+		if !s.in_alt_screen {
+			draw_gutter(&b, s, y, abs_line, hist)
+		}
+
+		view_w := s.in_alt_screen ? s.width : term_view_w
+		cfg, cbg: u32 = 0xFFFFFFFF, 0xFFFFFFFF
+		cmode: GlyphMode = {}
+
+		for x in 0 ..< view_w {
+			g := row[x]
+			sel := false
+			if s.is_selecting && y >= sy_min && y <= sy_max {
+				if y > sy_min && y < sy_max {
+					sel = true
+				} else if sy_min == sy_max {
+					sel = x >= sx_start && x <= sx_end
+				} else if y == sy_min {
+					sel = x >= sx_start
+				} else if y == sy_max {
+					sel = x <= sx_end
+				}
+			}
+
+			if sel {
+				fmt.sbprint(&b, "\x1b[48;5;239m")
+				cfg, cbg = 0xFFFFFFFF, 0xFFFFFFFF
+			} else if g.mode != cmode || g.fg != cfg || g.bg != cbg {
+				fmt.sbprint(&b, "\x1b[0m")
+				if g.fg != DEFAULT_FG do render_color(&b, g.fg, true)
+				if g.bg != DEFAULT_BG do render_color(&b, g.bg, false)
+				if .Bold in g.mode do fmt.sbprint(&b, "\x1b[1m")
+				if .Italic in g.mode do fmt.sbprint(&b, "\x1b[3m")
+				cfg, cbg, cmode = g.fg, g.bg, g.mode
+			}
+			fmt.sbprint(&b, g.char == 0 ? ' ' : g.char)
+			if sel do fmt.sbprint(&b, "\x1b[0m")
+		}
+		fmt.sbprint(&b, "\x1b[K\r\n")
+		s.dirty[y] = false
+	}
+
+	draw_status_bar(&b, s, mgr)
+	fmt.sbprint(&b, "\x1b[0m")
+
+	if s.cursor_visible {
+		off := s.in_alt_screen ? 1 : (1 + GUTTER_W)
+		fmt.sbprintf(&b, "\x1b[%d;%dH\x1b[?25h", s.cursor_y + 1, s.cursor_x + off)
+	} else {
+		fmt.sbprint(&b, "\x1b[?25l")
+	}
+	fmt.print(strings.to_string(b))
+}
+
+draw_status_bar :: proc(b: ^strings.Builder, s: ^Screen, mgr: ^Manager) {
+	c, n: string
+	switch s.mode {
+	case .Insert:
+		c, n = "\x1b[30;44m", " INS "
+	case .Motion:
+		c, n = "\x1b[30;42m", " MOT "
+	case .Visual:
+		c, n = "\x1b[30;45m", " VIS "
+	case .Switch:
+		c, n = "\x1b[30;43m", " CMD "
+	}
+	fmt.sbprint(b, c, n, "\x1b[0m ")
+
+	for t, i in mgr.tabs {
+		if i == mgr.active {
+			fmt.sbprintf(b, "\x1b[7m %d:%s \x1b[0m ", i + 1, t.title)
+		} else {
+			fmt.sbprintf(b, "\x1b[90m %d:%s \x1b[0m ", i + 1, t.title)
+		}
+	}
+	fmt.sbprint(b, "\x1b[K")
+}
+
+draw_gutter :: proc(b: ^strings.Builder, s: ^Screen, y, abs_line: int, hist: bool) {
+	live := abs_line - s.total_lines_scrolled - 1
+	if hist || (live >= 0 && live <= s.pty_cursor_y) {
+		w := GUTTER_W - 1
+		if y == s.cursor_y {
+			fmt.sbprintf(b, "\x1b[33;49m%*d \x1b[0m", w, abs_line)
+		} else {
+			fmt.sbprintf(b, "\x1b[90;49m%*d \x1b[0m", w, abs(y - s.cursor_y))
 		}
 	} else {
 		fmt.sbprintf(b, "\x1b[49m%*s", GUTTER_W, "")
 	}
 }
 
-handle_control_char :: proc(s: ^Screen, b: rune, current_w: int) {
+get_row_data :: proc(s: ^Screen, abs_line: int) -> ([]Glyph, bool) {
+	start := max(1, s.total_lines_scrolled - len(s.scrollback) + 1)
+	if abs_line < start do return nil, false
+
+	if abs_line <= s.total_lines_scrolled {
+		idx := abs_line - start
+		if idx >= 0 && idx < len(s.scrollback) do return s.scrollback[idx], true
+	} else {
+		y := abs_line - s.total_lines_scrolled - 1
+		if y >= 0 && y < s.height do return s.grid[y * s.width:], false
+	}
+	return nil, false
+}
+
+render_color :: proc(b: ^strings.Builder, col: u32, is_fg: bool) {
+	pre := is_fg ? "38" : "48"
+	if col > 255 {
+		r, g, bl := (col >> 16) & 0xFF, (col >> 8) & 0xFF, col & 0xFF
+		fmt.sbprintf(b, "\x1b[%s;2;%d;%d;%dm", pre, r, g, bl)
+	} else {
+		fmt.sbprintf(b, "\x1b[%s;5;%dm", pre, col)
+	}
+}
+
+handle_control_char :: proc(s: ^Screen, b: rune, w: int) {
 	switch b {
-	case BACKSPACE, DEL:
+	case 8, 127:
 		if s.cursor_x > 0 {
 			s.cursor_x -= 1
 			s.dirty[s.cursor_y] = true
@@ -222,7 +286,7 @@ handle_control_char :: proc(s: ^Screen, b: rune, current_w: int) {
 		s.pty_cursor_x = s.cursor_x
 	case '\t':
 		s.cursor_x = (s.cursor_x + 8) & ~int(7)
-		if s.cursor_x >= current_w do s.cursor_x = current_w - 1
+		if s.cursor_x >= w do s.cursor_x = w - 1
 		if s.cursor_y < len(s.dirty) do s.dirty[s.cursor_y] = true
 		s.pty_cursor_x = s.cursor_x
 	case '\n':
@@ -236,203 +300,12 @@ handle_control_char :: proc(s: ^Screen, b: rune, current_w: int) {
 	}
 }
 
-draw_screen :: proc() {
-	b := strings.builder_make()
-	defer strings.builder_destroy(&b)
-
-	fmt.sbprint(&b, "\x1b[H\x1b[?25l")
-	term_view_w := max(1, screen.width - GUTTER_W)
-
-	history_len := len(screen.scrollback)
-
-	// Pre-calc selection bounds
-	sel_valid := screen.is_selecting
-	sy_min, sy_max := 0, 0
-	sx_start, sx_end := 0, 0
-
-	if sel_valid {
-		if screen.selection_start_y < screen.cursor_y {
-			sy_min, sy_max = screen.selection_start_y, screen.cursor_y
-			sx_start, sx_end = screen.selection_start_x, screen.cursor_x
-		} else if screen.selection_start_y > screen.cursor_y {
-			sy_min, sy_max = screen.cursor_y, screen.selection_start_y
-			sx_start, sx_end = screen.cursor_x, screen.selection_start_x
-		} else {
-			sy_min, sy_max = screen.cursor_y, screen.cursor_y
-			sx_start = min(screen.selection_start_x, screen.cursor_x)
-			sx_end = max(screen.selection_start_x, screen.cursor_x)
-		}
+blank_glyph :: proc(s: ^Screen) -> Glyph {
+	return Glyph {
+		char = 0,
+		fg = s.current_attr.fg,
+		bg = s.current_attr.bg,
+		mode = s.current_attr.mode,
 	}
-
-	for y in 0 ..< screen.height - 1 {
-		abs_line := (screen.total_lines_scrolled + y + 1) - screen.scroll_offset
-		row_data: []Glyph
-		is_history := false
-
-		if screen.in_alt_screen {
-			start := y * screen.width
-			if start < len(screen.alt_grid) {
-				row_data = screen.alt_grid[start:start + screen.width]
-			}
-		} else {
-			row_data, is_history = get_row_data(abs_line)
-		}
-
-		if !screen.in_alt_screen {
-			draw_gutter(&b, y, abs_line, screen.pty_cursor_y, is_history)
-		}
-
-		view_w := screen.in_alt_screen ? screen.width : term_view_w
-
-		// Inline drawing loop for tighter control over selection
-		curr_fg, curr_bg: u32 = 0xFFFFFFFF, 0xFFFFFFFF
-		curr_mode: GlyphMode = {}
-
-		for x in 0 ..< view_w {
-			glyph := row_data[x]
-			selected := false
-
-			if sel_valid && y >= sy_min && y <= sy_max {
-				if y > sy_min && y < sy_max {
-					selected = true
-				} else if sy_min == sy_max {
-					selected = x >= sx_start && x <= sx_end
-				} else if y == sy_min {
-					selected = x >= sx_start
-				} else if y == sy_max {
-					selected = x <= sx_end
-				}
-			}
-
-			if selected {
-				fmt.sbprint(&b, "\x1b[48;5;239m") // Selection Grey
-				curr_fg, curr_bg = 0xFFFFFFFF, 0xFFFFFFFF
-			} else {
-				if glyph.mode != curr_mode || glyph.fg != curr_fg || glyph.bg != curr_bg {
-					fmt.sbprint(&b, "\x1b[0m")
-					if glyph.fg != DEFAULT_FG do render_color(&b, glyph.fg, true)
-					if glyph.bg != DEFAULT_BG do render_color(&b, glyph.bg, false)
-					if .Bold in glyph.mode do fmt.sbprint(&b, "\x1b[1m")
-					if .Italic in glyph.mode do fmt.sbprint(&b, "\x1b[3m")
-
-					curr_fg, curr_bg, curr_mode = glyph.fg, glyph.bg, glyph.mode
-				}
-			}
-			fmt.sbprint(&b, glyph.char == 0 ? ' ' : glyph.char)
-			if selected do fmt.sbprint(&b, "\x1b[0m")
-		}
-
-		fmt.sbprint(&b, "\x1b[K\r\n")
-		screen.dirty[y] = false
-	}
-
-	draw_status_bar(&b)
-	fmt.sbprint(&b, "\x1b[0m")
-
-	if screen.cursor_visible {
-		offset_x := screen.in_alt_screen ? 1 : (1 + GUTTER_W)
-		fmt.sbprintf(&b, "\x1b[%d;%dH", screen.cursor_y + 1, screen.cursor_x + offset_x)
-		fmt.sbprint(&b, "\x1b[?25h")
-	} else {
-		fmt.sbprint(&b, "\x1b[?25l")
-	}
-	fmt.print(strings.to_string(b))
-}
-
-render_color :: proc(b: ^strings.Builder, col: u32, is_fg: bool) {
-	// ... minimal color rendering helper ...
-	prefix := is_fg ? "38" : "48"
-	if col > 255 {
-		r, g, bl := (col >> 16) & 0xFF, (col >> 8) & 0xFF, col & 0xFF
-		fmt.sbprintf(b, "\x1b[%s;2;%d;%d;%dm", prefix, r, g, bl)
-	} else {
-		fmt.sbprintf(b, "\x1b[%s;5;%dm", prefix, col)
-	}
-}
-
-draw_status_bar :: proc(b: ^strings.Builder) {
-	mode_color: string
-	mode_name: string
-
-	switch screen.mode {
-	case .Insert:
-		mode_color, mode_name = "\x1b[30;44m", " INSERT "
-	case .Motion:
-		mode_color, mode_name = "\x1b[30;42m", " MOTION "
-	case .Switch:
-		mode_color, mode_name = "\x1b[30;43m", " SWITCH "
-	case .Visual:
-		mode_color, mode_name = "\x1b[30;45m", " SELECT "
-	}
-
-	fmt.sbprint(b, mode_color)
-	if screen.scroll_offset > 0 {
-		fmt.sbprintf(b, "%s [HISTORY: -%d] ", mode_name, screen.scroll_offset)
-	} else {
-		fmt.sbprint(b, mode_name)
-	}
-	fmt.sbprint(b, "\x1b[K")
-}
-
-draw_grid :: proc(
-	b: ^strings.Builder,
-	y: int,
-	row_data: []Glyph,
-	view_w: int,
-	is_in_selection: bool,
-) {
-	curr_fg, curr_bg: u32 = 0xFFFFFFFF, 0xFFFFFFFF
-	curr_mode: GlyphMode = {}
-
-	for x in 0 ..< view_w {
-		glyph := row_data[x]
-		// is_cursor := (x == screen.cursor_x && y == screen.cursor_y)
-
-		// if is_cursor || is_in_selection {
-		if is_in_selection {
-			fmt.sbprint(b, "\x1b[0m")
-			// if is_cursor {
-			// 	fmt.sbprint(b, "\x1b[7m")
-			// } else if is_in_selection {
-			fmt.sbprint(b, "\x1b[48;5;239m")
-			// }
-			curr_fg, curr_bg = 0xFFFFFFFF, 0xFFFFFFFF
-			curr_mode = {}
-		} else {
-			if glyph.mode != curr_mode || glyph.fg != curr_fg || glyph.bg != curr_bg {
-				fmt.sbprint(b, "\x1b[0m")
-
-				if glyph.fg == DEFAULT_FG {
-					fmt.sbprint(b, "\x1b[39m")
-				} else if .TrueColorFG in glyph.mode {
-					r := (glyph.fg >> 16) & 0xFF
-					g := (glyph.fg >> 8) & 0xFF
-					bl := glyph.fg & 0xFF
-					fmt.sbprintf(b, "\x1b[38;2;%d;%d;%dm", r, g, bl)
-				} else {
-					fmt.sbprintf(b, "\x1b[38;5;%dm", glyph.fg)
-				}
-
-				if glyph.bg == DEFAULT_BG {
-					fmt.sbprint(b, "\x1b[49m")
-				} else if .TrueColorBG in glyph.mode {
-					r := (glyph.bg >> 16) & 0xFF
-					g := (glyph.bg >> 8) & 0xFF
-					bl := glyph.bg & 0xFF
-					fmt.sbprintf(b, "\x1b[48;2;%d;%d;%dm", r, g, bl)
-				} else {
-					fmt.sbprintf(b, "\x1b[48;5;%dm", glyph.bg)
-				}
-
-				if .Bold in glyph.mode do fmt.sbprint(b, "\x1b[1m")
-				if .Italic in glyph.mode do fmt.sbprint(b, "\x1b[3m")
-				if .Underline in glyph.mode do fmt.sbprint(b, "\x1b[4m")
-
-				curr_fg, curr_bg, curr_mode = glyph.fg, glyph.bg, glyph.mode
-			}
-		}
-		fmt.sbprint(b, glyph.char == 0 ? ' ' : glyph.char)
-	}
-	fmt.sbprint(b, "\x1b[0m")
 }
 
