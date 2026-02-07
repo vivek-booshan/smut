@@ -1,74 +1,86 @@
 package smut
 
+import "core:encoding/base64"
 import "core:fmt"
 import "core:os"
 import "core:strings"
-import "core:unicode/utf8"
+import "core:sys/posix"
 
 foreign import libc "system:c"
-foreign libc {system :: proc(command: cstring) -> i32 ---}
+foreign libc {
+	system :: proc(command: cstring) -> i32 ---
+}
 
-yank_selection :: yank_selection_to_clipboard
-yank_selection_to_clipboard :: proc(s: ^Screen) {
-	low := min(s.selection_start_y, s.cursor_y)
-	high := max(s.selection_start_y, s.cursor_y)
-	term_view_w := max(1, s.width - GUTTER_W)
+yank_selection :: proc(s: ^Screen) {
+	text := capture_selection_text(s)
+	defer delete(text)
 
-	// 1. Build the string from the grid rows
+	emit_osc52_sequence(text)
+	dispatch_to_system_clipboard(text)
+}
+
+capture_selection_text :: proc(s: ^Screen) -> string {
 	builder := strings.builder_make()
-	defer strings.builder_destroy(&builder)
 
-	for y in low ..< high + 1 {
-		row_start := y * s.width
+	y_min := min(s.selection_start_y, s.cursor_y)
+	y_max := max(s.selection_start_y, s.cursor_y)
+	max_col := max(1, s.width - GUTTER_W)
 
-		// Find the last non-zero character to avoid yanking trailing nulls
-		last_char_idx := 0
-		for x in 0 ..< term_view_w {
-			if s.grid[row_start + x].char != 0 {
-				last_char_idx = x + 1
+	for y in y_min ..< y_max + 1 {
+		line_offset := y * s.width
+		content_length := 0
+
+		for x in 0 ..< max_col {
+			if s.grid[line_offset + x].char != 0 {
+				content_length = x + 1
 			}
 		}
 
-		for x in 0 ..< last_char_idx {
-			g := s.grid[row_start + x]
-			strings.write_rune(&builder, g.char)
+		for x in 0 ..< content_length {
+			glyph := s.grid[line_offset + x]
+			strings.write_rune(&builder, glyph.char)
 		}
 
-		// row_str := utf8.runes_to_string(s.grid[row_start:row_start + last_char_idx])
-		// strings.write_string(&builder, row_str)
-		if y < high {
+		if y < y_max {
 			strings.write_byte(&builder, '\n')
 		}
-
 	}
-	full_text := strings.to_string(builder)
 
-	// 2. Pipe the text to the system clipboard
-	// On Linux: xclip -selection clipboard
-	// On macOS: pbcopy
-	// Using a simple shell command for portability
+	return strings.to_string(builder)
+}
+
+emit_osc52_sequence :: proc(text: string) {
+	encoded := base64.encode(transmute([]u8)text)
+	defer delete(encoded)
+
+	fmt.printf("\x1b]52;c;%s\a", encoded)
+}
+
+dispatch_to_system_clipboard :: proc(text: string) {
+
+	if os.get_env("SSH_TTY") != "" do return
+
 	when ODIN_OS == .Darwin {
-		pipe_to_command("pbcopy", full_text)
+		spawn_clipboard_pipe("pbcopy", text)
 	} else when ODIN_OS == .Linux {
-		pipe_to_command("xclip -selection clipboard", full_text)
-
+		if os.get_env("WAYLAND_DISPLAY") != "" {
+			spawn_clipboard_pipe("wl-copy", text)
+		} else {
+			spawn_clipboard_pipe("xclip -selection clipboard", text)
+		}
 	}
 }
 
-pipe_to_command :: proc(cmd: string, input: string) {
-	// We use os.open to a pipe or a simple temporary file redirection
-	// For a robust implementation in Odin, use core:os/process
-	// Simpler hack using system():
-	temp_file := "/tmp/smut_yank.txt"
-	os.write_entire_file(temp_file, transmute([]u8)input)
+spawn_clipboard_pipe :: proc(method: string, input: string) {
+	pid := posix.getpid()
+	path := fmt.tprintf("/tmp/smut_yank_%d.txt", pid)
 
-	final_cmd := fmt.tprintf("cat %s | %s", temp_file, cmd)
+	if !os.write_entire_file(path, transmute([]u8)input) do return
 
-	// Convert to C string for system() call
-	c_cmd := strings.clone_to_cstring(final_cmd, context.temp_allocator)
+	shell_cmd := fmt.tprintf("cat %s | %s", path, method)
+	c_str := strings.clone_to_cstring(shell_cmd, context.temp_allocator)
 
-
-	system(c_cmd)
-	os.remove(temp_file)
+	system(c_str)
+	os.remove(path)
 }
 
