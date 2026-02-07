@@ -7,6 +7,11 @@ ALT_SCREEN :: 1049
 
 CAN :: 0x18 // Cancel
 SUB :: 0x1a // Substitute
+ESC :: 27
+BACKSPACE :: 8
+BEL :: '\a'
+DEL :: 127
+CONTROLC0 :: 32
 
 Esc :: enum u8 {
 	RIS = 'c', // Reset to Initial State	

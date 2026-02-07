@@ -244,12 +244,31 @@ draw_screen :: proc() {
 	term_view_w := max(1, screen.width - GUTTER_W)
 
 	history_len := len(screen.scrollback)
-	for y in 0 ..< screen.height - 1 {
-		row_idx := history_len - screen.scroll_offset + y
-		abs_line := (screen.total_lines_scrolled + y + 1) - screen.scroll_offset
 
+	// Pre-calc selection bounds
+	sel_valid := screen.is_selecting
+	sy_min, sy_max := 0, 0
+	sx_start, sx_end := 0, 0
+
+	if sel_valid {
+		if screen.selection_start_y < screen.cursor_y {
+			sy_min, sy_max = screen.selection_start_y, screen.cursor_y
+			sx_start, sx_end = screen.selection_start_x, screen.cursor_x
+		} else if screen.selection_start_y > screen.cursor_y {
+			sy_min, sy_max = screen.cursor_y, screen.selection_start_y
+			sx_start, sx_end = screen.cursor_x, screen.selection_start_x
+		} else {
+			sy_min, sy_max = screen.cursor_y, screen.cursor_y
+			sx_start = min(screen.selection_start_x, screen.cursor_x)
+			sx_end = max(screen.selection_start_x, screen.cursor_x)
+		}
+	}
+
+	for y in 0 ..< screen.height - 1 {
+		abs_line := (screen.total_lines_scrolled + y + 1) - screen.scroll_offset
 		row_data: []Glyph
 		is_history := false
+
 		if screen.in_alt_screen {
 			start := y * screen.width
 			if start < len(screen.alt_grid) {
@@ -259,14 +278,49 @@ draw_screen :: proc() {
 			row_data, is_history = get_row_data(abs_line)
 		}
 
-		is_in_selection := within_selection(y)
-
 		if !screen.in_alt_screen {
 			draw_gutter(&b, y, abs_line, screen.pty_cursor_y, is_history)
 		}
 
 		view_w := screen.in_alt_screen ? screen.width : term_view_w
-		draw_grid(&b, y, row_data, view_w, is_in_selection)
+
+		// Inline drawing loop for tighter control over selection
+		curr_fg, curr_bg: u32 = 0xFFFFFFFF, 0xFFFFFFFF
+		curr_mode: GlyphMode = {}
+
+		for x in 0 ..< view_w {
+			glyph := row_data[x]
+			selected := false
+
+			if sel_valid && y >= sy_min && y <= sy_max {
+				if y > sy_min && y < sy_max {
+					selected = true
+				} else if sy_min == sy_max {
+					selected = x >= sx_start && x <= sx_end
+				} else if y == sy_min {
+					selected = x >= sx_start
+				} else if y == sy_max {
+					selected = x <= sx_end
+				}
+			}
+
+			if selected {
+				fmt.sbprint(&b, "\x1b[48;5;239m") // Selection Grey
+				curr_fg, curr_bg = 0xFFFFFFFF, 0xFFFFFFFF
+			} else {
+				if glyph.mode != curr_mode || glyph.fg != curr_fg || glyph.bg != curr_bg {
+					fmt.sbprint(&b, "\x1b[0m")
+					if glyph.fg != DEFAULT_FG do render_color(&b, glyph.fg, true)
+					if glyph.bg != DEFAULT_BG do render_color(&b, glyph.bg, false)
+					if .Bold in glyph.mode do fmt.sbprint(&b, "\x1b[1m")
+					if .Italic in glyph.mode do fmt.sbprint(&b, "\x1b[3m")
+
+					curr_fg, curr_bg, curr_mode = glyph.fg, glyph.bg, glyph.mode
+				}
+			}
+			fmt.sbprint(&b, glyph.char == 0 ? ' ' : glyph.char)
+			if selected do fmt.sbprint(&b, "\x1b[0m")
+		}
 
 		fmt.sbprint(&b, "\x1b[K\r\n")
 		screen.dirty[y] = false
@@ -276,21 +330,24 @@ draw_screen :: proc() {
 	fmt.sbprint(&b, "\x1b[0m")
 
 	if screen.cursor_visible {
-		// Terminals 1-indexed
 		offset_x := screen.in_alt_screen ? 1 : (1 + GUTTER_W)
-		phys_x := screen.cursor_x + offset_x
-		phys_y := screen.cursor_y + 1
-		fmt.sbprintf(&b, "\x1b[%d;%dH", phys_y, phys_x)
-
-		style := screen.cursor_style == 0 ? 2 : screen.cursor_style
-		fmt.sbprintf(&b, "\x1b[%d q", style)
-
+		fmt.sbprintf(&b, "\x1b[%d;%dH", screen.cursor_y + 1, screen.cursor_x + offset_x)
 		fmt.sbprint(&b, "\x1b[?25h")
 	} else {
 		fmt.sbprint(&b, "\x1b[?25l")
 	}
-
 	fmt.print(strings.to_string(b))
+}
+
+render_color :: proc(b: ^strings.Builder, col: u32, is_fg: bool) {
+	// ... minimal color rendering helper ...
+	prefix := is_fg ? "38" : "48"
+	if col > 255 {
+		r, g, bl := (col >> 16) & 0xFF, (col >> 8) & 0xFF, col & 0xFF
+		fmt.sbprintf(b, "\x1b[%s;2;%d;%d;%dm", prefix, r, g, bl)
+	} else {
+		fmt.sbprintf(b, "\x1b[%s;5;%dm", prefix, col)
+	}
 }
 
 draw_status_bar :: proc(b: ^strings.Builder) {
@@ -304,7 +361,7 @@ draw_status_bar :: proc(b: ^strings.Builder) {
 		mode_color, mode_name = "\x1b[30;42m", " MOTION "
 	case .Switch:
 		mode_color, mode_name = "\x1b[30;43m", " SWITCH "
-	case .Select:
+	case .Visual:
 		mode_color, mode_name = "\x1b[30;45m", " SELECT "
 	}
 

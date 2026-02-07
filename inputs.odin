@@ -5,30 +5,29 @@ import "core:sys/posix"
 import "core:unicode/utf8"
 
 Motion :: enum u8 {
-	None        = 0,
-	Down        = 'j',
-	Up          = 'k',
-	Left        = 'h',
-	Right       = 'l',
-	HalfPgUp    = 21,
-	HalfPgDn    = 4,
-	WordBack    = 'b',
-	WORDBack    = 'B',
-	WordEnd     = 'e',
-	WORDEnd     = 'E',
-	FindFwd     = 'f',
-	FindBack    = 'F',
-	TillFwd     = 't',
-	TillBack    = 'T',
-	ExtendBelow = 'x',
-	ExtendAbove = 'X',
-	Yank        = 'y',
-	Goto        = 'g',
-	Insert      = 'i',
-	Visual      = 'n',
-	Select      = 's',
-	Esc         = 27,
-	Leader      = 1,
+	None       = 0,
+	Down       = 'j',
+	Up         = 'k',
+	Left       = 'h',
+	Right      = 'l',
+	HalfPgUp   = 21,
+	HalfPgDn   = 4,
+	WordBack   = 'b',
+	WORDBack   = 'B',
+	WordEnd    = 'e',
+	WORDEnd    = 'E',
+	FindFwd    = 'f',
+	FindBack   = 'F',
+	TillFwd    = 't',
+	TillBack   = 'T',
+	Visual     = 's',
+	Motion     = 'm',
+	VisualLine = 'V',
+	Yank       = 'y',
+	Goto       = 'g',
+	Insert     = 'i',
+	Esc        = 27,
+	Leader     = 1,
 }
 
 Class :: enum {
@@ -85,7 +84,7 @@ handle_input :: proc(input: []u8, fd: posix.FD) -> bool {
 		case .Switch:
 			buffer_key(rune(b))
 			handle_switch(key)
-		case .Motion, .Select:
+		case .Motion, .Visual:
 			buffer_key(rune(b))
 			count := parse_count()
 			handle_motion(key, count)
@@ -106,9 +105,12 @@ handle_switch :: proc(m: Motion) -> bool {
 		screen.is_selecting = false
 		screen.cmd_idx = 0
 	case .Visual:
+		screen.mode = .Visual
+		screen.is_selecting = true
+		screen.selection_start_x = screen.cursor_x
+		screen.selection_start_y = screen.cursor_y
+	case .Motion:
 		screen.mode = .Motion
-	case .Select:
-		screen.mode = .Select
 	case:
 		return false
 	}
@@ -141,26 +143,31 @@ handle_motion :: proc(m: Motion, count: int) -> bool {
 	case .FindFwd, .FindBack, .TillFwd, .TillBack:
 		return true
 
-	case .ExtendBelow:
-		if !screen.is_selecting do screen.selection_start_y = screen.cursor_y
-		move_vert(count)
-		screen.is_selecting = true
-	case .ExtendAbove:
-		if !screen.is_selecting do screen.selection_start_y = screen.cursor_y
-		move_vert(-count)
-		screen.is_selecting = true
+	// case .Visual:
+	// 	if screen.mode != .Visual {
+	// 		screen.mode = .Visual
+	// 		screen.is_selecting = true
+	// 		screen.selection_start_x = screen.cursor_x
+	// 		screen.selection_start_y = screen.cursor_y
+	// 	} else {
+	// 		screen.mode = .Motion
+	// 		screen.is_selecting = false
+	// 	}
 
 	case .Yank:
 		if screen.is_selecting {
 			yank_selection(&screen)
 			screen.is_selecting = false
+			screen.mode = .Motion
 		}
+
 	case .Goto:
 		screen.scroll_offset = 0
 		screen.cursor_x = screen.pty_cursor_x
 		screen.cursor_y = screen.pty_cursor_y
 	case .Esc:
 		screen.is_selecting = false
+		screen.mode = .Motion
 	case:
 		ok = try_complete_search(u8(m), count)
 	}
@@ -169,9 +176,9 @@ handle_motion :: proc(m: Motion, count: int) -> bool {
 	return ok
 }
 
+// ... include move_vert, step_back, step_end, etc from previous response ...
 move_vert :: proc(n: int) {
 	dest := screen.cursor_y + n
-
 	if n > 0 {
 		if dest <= screen.pty_cursor_y {
 			screen.cursor_y = dest

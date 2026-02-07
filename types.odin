@@ -4,18 +4,9 @@ import "core:sys/posix"
 
 GUTTER_W :: 5
 
-CONTROLC0 :: 32
-DEL :: 127
-BEL :: '\a'
-TAB :: '\t'
-LF :: '\n'
-CR :: '\r'
-ESC :: '\e'
-BACKSPACE :: 8
-
 Key :: enum u8 {
 	NONE      = 0,
-	LEADER    = 1, // ctrl a
+	LEADER    = 1,
 	BACKSPACE = 8,
 	TAB       = 9,
 	ENTER     = 13,
@@ -44,7 +35,7 @@ AnsiState :: enum {
 Mode :: enum {
 	Insert,
 	Motion,
-	Select,
+	Visual,
 	Switch,
 }
 
@@ -55,10 +46,9 @@ Glyph :: struct {
 	mode: GlyphMode,
 }
 
-BLACK :: 999
-WHITE :: 999
-DEFAULT_FG :: BLACK
-DEFAULT_BG :: WHITE
+DEFAULT_FG :: 999
+DEFAULT_BG :: 999
+
 GlyphMode :: bit_set[GlyphAttr;u16]
 GlyphAttr :: enum u16 {
 	Bold,
@@ -80,6 +70,8 @@ Screen :: struct {
 	height:               int,
 	cursor_x:             int,
 	cursor_y:             int,
+
+	// PTY State
 	main_cursor_x:        int,
 	main_cursor_y:        int,
 	scroll_top:           int,
@@ -88,45 +80,46 @@ Screen :: struct {
 	pty_cursor_y:         int,
 	mode:                 Mode,
 
-	// Selection state
+	// Selection
+	selection_start_x:    int,
 	selection_start_y:    int,
 	is_selecting:         bool,
 
-	// Command Buffer
+	// Command State
 	cmd_buf:              [16]rune,
 	cmd_idx:              int,
 
-	// --- SCROLLBACK ---
+	// History
 	scrollback:           [dynamic][]Glyph,
 	scroll_offset:        int,
 	total_lines_scrolled: int,
 
-	// --- PARSER STATE ---
+	// Parser
 	ansi_state:           AnsiState,
 	parser_params:        [dynamic]int,
 	parser_current_param: int,
 	parser_has_param:     bool,
-	parser_private:       rune, // stores '?' or '<' etc
-	parser_intermediate:  rune, // stores '!' or '$' etc
+	parser_private:       rune,
+	parser_intermediate:  rune,
 
 	// Buffers
 	utf8_buf:             [4]u8,
 	utf8_len:             int,
 	osc_buf:              [dynamic]u8,
-
-	// OUTPUT BUFFER
 	reply_buf:            [dynamic]u8,
 
-	// ALTERNATE SCREEN BUFFER
+	// Alt Screen
 	in_alt_screen:        bool,
 	alt_grid:             [dynamic]Glyph,
 	alt_cursor_x:         int,
 	alt_cursor_y:         int,
-	resize:               bool,
-	current_attr:         Glyph,
 
-	// Cursor State
+	// Cursor
 	cursor_style:         int,
 	cursor_visible:       bool,
+
+	// Stuff
+	resize:               bool,
+	current_attr:         Glyph,
 }
 
