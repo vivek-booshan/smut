@@ -68,7 +68,8 @@ resize_screen :: proc(s: ^Screen, pty_fd: posix.FD) {
 		if i < len(s.dirty) do s.dirty[i] = true
 	}
 
-	set_window_size(pty_fd, s.width - GUTTER_W, s.height - 1)
+	pty_w := s.in_alt_screen ? s.width : s.width - GUTTER_W
+	set_window_size(pty_fd, pty_w, s.height - 1)
 }
 
 process_output :: proc(s: ^Screen, data: []u8) {
