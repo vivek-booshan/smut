@@ -1,5 +1,14 @@
 package smut
 
+// TODO(Vivek): Investigate cursor/gutter misalignment on ssh
+// NOTE(Vivek): after 80 characters \r\n sent --> two line feeds from auto wrap and explicit \n
+
+// NOTE(Vivek): internal cursor only incr at explicit \n
+// TODO(Vivek): abs(position) via \x1b[<y>;1H or avoid \n if line len == screen.width
+
+// NOTE(Vivek): ptnl pty discrepency --> cursor / gutter highlight drift
+// TODO(Vivek): sync height constants
+
 import "core:fmt"
 import "core:strings"
 import "core:sys/darwin"
