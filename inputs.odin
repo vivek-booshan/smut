@@ -71,6 +71,11 @@ handle_input :: proc(s: ^Screen, input: []u8, fd: posix.FD) -> Action {
 				s.mode = .Visual
 			case .Insert:
 				s.mode = .Insert
+				s.scroll_offset = 0
+				s.cursor_x = s.pty_cursor_x
+				s.cursor_y = s.pty_cursor_y
+				s.is_selecting = false
+				s.cmd_idx = 0
 			case .CreateTab, .CloseTab, .Redraw, .Quit:
 				fallthrough
 			case .NextTab, .PrevTab:
