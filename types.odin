@@ -42,6 +42,13 @@ Mode :: enum {
 	Switch,
 }
 
+MouseMode :: enum {
+	None,
+	X10,
+	ButtonEvent,
+	AnyEvent,
+}
+
 Glyph :: struct {
 	char: rune,
 	fg:   u32,
@@ -104,5 +111,7 @@ Screen :: struct {
 	cursor_style:         int,
 	cursor_visible:       bool,
 	needs_redraw:         bool,
+	mouse_mode:           MouseMode,
+	input_buf:            [dynamic]u8,
 }
 
