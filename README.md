@@ -16,11 +16,10 @@ Mode Switch Key (Ctrl a)
 - Leader + R : Refresh
 
 ### TODO
-- resizing when scrolling midway through history can cause crash
-- first input in motion/select mode doesn't include multiplier
-- scroll messes with gutter display if not at current line
-- decide if scroll should move cursor with it (probably not)
-- implement b, B, e, E, t, T, f, F (almost)
+- cursor details lost, find bug and resolve
+- differential rendering to speed up display
+- resizing when scrolling midway through history causes crash
+- Implement scroll (maybe keep key focused?)
 - implement goto mode (maybe just make this current line specific?)
 - implement vim style Select Mode in Select Mode (almost)
 - Kitty Graphics Protocol (is it even necessary?)
