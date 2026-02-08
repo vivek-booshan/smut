@@ -38,7 +38,11 @@ handle_input :: proc(s: ^Screen, input: []u8, fd: posix.FD) -> Action {
 	}
 
 	data := (len(s.input_buf) > 0) ? s.input_buf[:] : input
-	for &b, i in data {
+
+	i := 0
+	for i < len(data) {
+		defer i += 1
+		b := data[i]
 
 		if b == KEY_ESC && i + 2 < len(data) && data[i + 1] == '[' && data[i + 2] == '<' {
 			end_idx := 1
@@ -51,6 +55,7 @@ handle_input :: proc(s: ^Screen, input: []u8, fd: posix.FD) -> Action {
 			if end_idx != -1 {
 				seq := data[i:end_idx + 1]
 				handle_mouse_sequence(s, seq, fd)
+				i = end_idx + 1
 				continue
 			} else {
 				if len(s.input_buf) == 0 do append(&s.input_buf, ..data[i:])
