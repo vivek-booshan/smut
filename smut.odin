@@ -122,15 +122,11 @@ main :: proc() {
 
 		now := time.now()
 		if (active.screen.needs_redraw || should_resize) &&
-		   len(manager.tabs) > 0 /* &&
-		   time.diff(last_draw_time, now) >= FRAME_TIME */{
-			if time.diff(last_draw_time, now) >= FRAME_TIME {
-				draw_screen(active.screen, &manager)
-				active.screen.needs_redraw = false
-				// ui_dirty = false
-				// should_resize = false
-				last_draw_time = now
-			}
+		   len(manager.tabs) > 0 &&
+		   time.diff(last_draw_time, now) >= FRAME_TIME {
+			draw_screen(active.screen, &manager)
+			active.screen.needs_redraw = false
+			last_draw_time = now
 		}
 	}
 }
@@ -146,12 +142,16 @@ setup_terminal :: proc() {
 	raw.c_cflag -= {.PARENB}
 	raw.c_cflag += {.CS8}
 	posix.tcsetattr(posix.STDIN_FILENO, .TCSANOW, &raw)
-	fmt.print("\x1b[?1049h\x1b[?25l")
+	ENABLE_MOUSE_DRAG :: "\x1b[?1002h"
+	ENABLE_SGR_MOUSE_PROTOCOL :: "\x1b[?1006h"
+	fmt.print("\x1b[?1049h\x1b[?25l" + ENABLE_MOUSE_DRAG + ENABLE_SGR_MOUSE_PROTOCOL)
 	signal(SIGWINCH, rawptr(handle_winch))
 }
 
 restore_terminal :: proc() {
-	fmt.print("\x1b[?1049l\x1b[?25h")
+	DISABLE_MOUSE_DRAG :: "\x1b[?1002l"
+	DISABLE_SGRMPROT :: "\x1b[?1006l"
+	fmt.print("\x1b[?1049l\x1b[?25h" + DISABLE_MOUSE_DRAG + DISABLE_SGRMPROT)
 }
 
 handle_winch :: proc "c" (sig: i32) {
