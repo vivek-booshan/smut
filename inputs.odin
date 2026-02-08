@@ -33,7 +33,32 @@ Motion :: enum u8 {
 handle_input :: proc(s: ^Screen, input: []u8, fd: posix.FD) -> Action {
 	act := Action.None
 
-	for &b, i in input {
+	if len(s.input_buf) > 0 {
+		append(&s.input_buf, ..input)
+	}
+
+	data := (len(s.input_buf) > 0) ? s.input_buf[:] : input
+	for &b, i in data {
+
+		if b == KEY_ESC && i + 2 < len(data) && data[i + 1] == '[' && data[i + 2] == '<' {
+			end_idx := 1
+			for j := i + 3; j < len(data); j += 1 {
+				if data[j] == 'M' || data[j] == 'm' {
+					end_idx = j
+					break
+				}
+			}
+			if end_idx != -1 {
+				seq := data[i:end_idx + 1]
+				handle_mouse_sequence(s, seq, fd)
+				continue
+			} else {
+				if len(s.input_buf) == 0 do append(&s.input_buf, ..data[i:])
+				return act
+			}
+		}
+
+
 		key := Motion(b)
 
 		if key == .Leader {
@@ -92,7 +117,13 @@ handle_input :: proc(s: ^Screen, input: []u8, fd: posix.FD) -> Action {
 			posix.write(fd, &b, 1)
 		}
 	}
+
+	if len(s.input_buf) > 0 do clear(&s.input_buf)
 	return act
+}
+
+handle_mouse_sequence :: proc(s: ^Screen, seq: []u8, fd: posix.FD) {
+
 }
 
 handle_motion :: proc(s: ^Screen, m: Motion, count: int) {

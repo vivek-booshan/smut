@@ -314,6 +314,12 @@ handle_csi_dispatch :: proc(s: ^Screen, final: u8, fd: posix.FD) {
 				resize_screen(s, fd)
 			} else if mode == 25 {
 				s.cursor_visible = true
+			} else if mode == 1000 {
+				s.mouse_mode = .X10
+			} else if mode == 1002 {
+				s.mouse_mode = .ButtonEvent
+			} else if mode == 1003 {
+				s.mouse_mode = .AnyEvent
 			}
 		}
 	case .RM:
@@ -327,6 +333,8 @@ handle_csi_dispatch :: proc(s: ^Screen, final: u8, fd: posix.FD) {
 				resize_screen(s, fd)
 			} else if mode == 25 {
 				s.cursor_visible = false
+			} else if mode == 1000 || mode == 1002 || mode == 1003 {
+				s.mouse_mode = .None
 			}
 		}
 	case .DECSUSR:
