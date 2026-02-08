@@ -208,6 +208,9 @@ draw_screen :: proc(s: ^Screen, mgr: ^Manager) {
 	if s.cursor_visible {
 		off := s.in_alt_screen ? 1 : (1 + GUTTER_W)
 		fmt.sbprintf(&b, "\x1b[%d;%dH\x1b[?25h", s.cursor_y + 1, s.cursor_x + off)
+
+		style := s.cursor_style == 0 ? 2 : s.cursor_style
+		fmt.sbprintf(&b, "\x1b[%d q", style)
 	} else {
 		fmt.sbprint(&b, "\x1b[?25l")
 	}
