@@ -18,6 +18,8 @@ Mode Switch Key (Ctrl a)
 ### TODO
 - cursor details lost, find bug and resolve
 - differential rendering to speed up display
+- lines wrap around if > 80
+- resize to smaller box will delete characters originally outside new box
 - resizing when scrolling midway through history causes crash
 - Implement scroll (maybe keep key focused?)
 - implement goto mode (maybe just make this current line specific?)
