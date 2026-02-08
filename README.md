@@ -1,5 +1,5 @@
 # smut
-A Simple Multiplexing Unix Terminal
+Simple Multiplexer for Unix Terminal
 
 `smut` is a modal alternative to `tmux` inspired by `st` and modal editors
 
