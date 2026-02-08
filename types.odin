@@ -103,5 +103,6 @@ Screen :: struct {
 	current_attr:         Glyph,
 	cursor_style:         int,
 	cursor_visible:       bool,
+	needs_redraw:         bool,
 }
 

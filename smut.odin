@@ -6,10 +6,12 @@ import "core:path/filepath"
 import "core:strings"
 import "core:sys/darwin"
 import "core:sys/posix"
+import "core:time"
 
 TIOCSWINSZ :: 0x80087467 when ODIN_OS == .Darwin else 0x5414
 TIOCSCTTY :: 0x20007461 when ODIN_OS == .Darwin else 0x540E
 SIGWINCH :: 28
+FRAME_TIME :: 5 * time.Millisecond
 
 Tab :: struct {
 	fd:     posix.FD,
@@ -43,9 +45,9 @@ main :: proc() {
 	}
 
 	buf: [65336]byte
-	running := true
+	last_draw_time := time.now()
 
-	loop: for running && len(manager.tabs) > 0 {
+	loop: for len(manager.tabs) > 0 {
 		active := &manager.tabs[manager.active]
 
 		if should_resize {
@@ -60,44 +62,35 @@ main :: proc() {
 			append(&fds, posix.pollfd{fd = t.fd, events = {.IN, .HUP, .ERR}})
 		}
 
-		if posix.poll(raw_data(fds), cast(u32)len(fds), -1) < 0 do continue
-
-		ui_dirty := false
+		if posix.poll(raw_data(fds), cast(u32)len(fds), 5) < 0 do continue
 
 		if .IN in fds[0].revents {
 			n := posix.read(posix.STDIN_FILENO, &buf[0], len(buf))
 			if n > 0 {
 				act := handle_input(active.screen, buf[:n], active.fd)
+				active.screen.needs_redraw = true
 				#partial switch act {
-				case .None:
 				case .Redraw:
-					ui_dirty = true
 				case .CreateTab:
 					spawn_tab(&manager)
-					ui_dirty = true
 					continue loop
 				case .NextTab:
 					manager.active = (manager.active + 1) % len(manager.tabs)
-					ui_dirty = true
 				case .PrevTab:
 					manager.active = (manager.active - 1 + len(manager.tabs)) % len(manager.tabs)
-					ui_dirty = true
 				case .CloseTab:
 					close_tab(&manager, manager.active)
-					ui_dirty = true
 					if len(manager.tabs) == 0 do break loop
 				case .Quit:
-					running = false
+					break loop
 				}
 			}
 		}
 
 		if len(manager.tabs) == 0 do break loop
-		active = &manager.tabs[manager.active]
 
 		tabs_polled := len(fds) - 1
 		for i := tabs_polled - 1; i >= 0; i -= 1 {
-
 			if i >= len(manager.tabs) do continue
 
 			revents := fds[i + 1].revents
@@ -105,8 +98,7 @@ main :: proc() {
 
 			if .HUP in revents || .ERR in revents {
 				close_tab(&manager, i)
-				should_resize = true
-				ui_dirty = true
+				active.screen.needs_redraw = true
 				continue
 			}
 
@@ -115,7 +107,7 @@ main :: proc() {
 				if n > 0 {
 					process_output(t.screen, buf[:n], t.fd)
 					if i == manager.active {
-						ui_dirty = true
+						active.screen.needs_redraw = true
 						if len(t.screen.reply_buf) > 0 {
 							posix.write(t.fd, &t.screen.reply_buf[0], len(t.screen.reply_buf))
 							clear(&t.screen.reply_buf)
@@ -123,14 +115,22 @@ main :: proc() {
 					}
 				} else {
 					close_tab(&manager, i)
-					should_resize = true
-					ui_dirty = true
+					active.screen.needs_redraw = true
 				}
 			}
 		}
 
-		if (ui_dirty || should_resize) && len(manager.tabs) > 0 {
-			draw_screen(manager.tabs[manager.active].screen, &manager)
+		now := time.now()
+		if (active.screen.needs_redraw || should_resize) &&
+		   len(manager.tabs) > 0 /* &&
+		   time.diff(last_draw_time, now) >= FRAME_TIME */{
+			if time.diff(last_draw_time, now) >= FRAME_TIME {
+				draw_screen(active.screen, &manager)
+				active.screen.needs_redraw = false
+				// ui_dirty = false
+				// should_resize = false
+				last_draw_time = now
+			}
 		}
 	}
 }
