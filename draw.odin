@@ -223,7 +223,7 @@ draw_status_bar :: proc(b: ^strings.Builder, s: ^Screen, mgr: ^Manager) {
 	case .Switch:
 		col, name = "\x1b[30;47m", " CMD "
 	case .Insert:
-		col, name = "\x1b[37;44m", " INS "
+		col, name = "\x1b[30;46m", " INS "
 	case .Visual:
 		col, name = "\x1b[30;45m", " VIS "
 	}

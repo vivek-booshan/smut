@@ -5,28 +5,29 @@ import "core:sys/posix"
 import "core:unicode/utf8"
 
 Motion :: enum u8 {
-	None       = 0,
-	Down       = 'j',
-	Up         = 'k',
-	Left       = 'h',
-	Right      = 'l',
-	HalfPgUp   = 21,
-	HalfPgDn   = 4,
-	WordBack   = 'b',
-	WORDBack   = 'B',
-	WordEnd    = 'e',
-	WORDEnd    = 'E',
-	FindFwd    = 'f',
-	FindBack   = 'F',
-	TillFwd    = 't',
-	TillBack   = 'T',
-	Visual     = 'v',
-	VisualLine = 'V',
-	Yank       = 'y',
-	Goto       = 'g',
-	Insert     = 'i',
-	Esc        = 27,
-	Leader     = 1,
+	None     = 0,
+	Down     = 'j',
+	Up       = 'k',
+	Left     = 'h',
+	Right    = 'l',
+	HalfPgUp = 21,
+	HalfPgDn = 4,
+	WordBack = 'b',
+	WORDBack = 'B',
+	WordEnd  = 'e',
+	WORDEnd  = 'E',
+	FindFwd  = 'f',
+	FindBack = 'F',
+	TillFwd  = 't',
+	TillBack = 'T',
+	Visual   = 'v',
+	Line     = 'x',
+	LineBack = 'X',
+	Yank     = 'y',
+	GotoEnd  = 'G',
+	Insert   = 'i',
+	Esc      = KEY_ESC,
+	Leader   = KEY_LEADER,
 }
 
 handle_input :: proc(s: ^Screen, input: []u8, fd: posix.FD) -> Action {
@@ -111,32 +112,36 @@ handle_motion :: proc(s: ^Screen, m: Motion, count: int) {
 		s.cursor_x = max(0, s.cursor_x - count)
 	case .Right:
 		s.cursor_x = min(s.width - 1, s.cursor_x + count)
-
-	case .Visual:
-		if s.mode != .Visual {
-			s.mode = .Visual
-			s.is_selecting = true
-			s.selection_start_x = s.cursor_x
+	case .Line:
+		if !s.is_selecting {
 			s.selection_start_y = s.cursor_y
-		} else {
-			s.mode = .Motion
-			s.is_selecting = false
 		}
+		if count > 1 || s.is_selecting {
+			s.cursor_y = min(s.pty_cursor_y, s.cursor_y + count)
+		}
+		s.is_selecting = true
 
+	case .LineBack:
+		if !s.is_selecting {
+			s.selection_start_y = s.cursor_y
+		}
+		if count > 1 || s.is_selecting {
+			s.cursor_y = max(0, s.cursor_y - count)
+		}
+		s.is_selecting = true
 	case .Yank:
 		if s.is_selecting {
 			yank_selection(s)
 			s.is_selecting = false
 			s.mode = .Motion
 		}
-
-	case .Goto:
+	case .GotoEnd:
 		s.scroll_offset = 0
 		s.cursor_x = s.pty_cursor_x
 		s.cursor_y = s.pty_cursor_y
 	case .Esc:
 		s.is_selecting = false
-		s.mode = .Motion
+		s.mode = .Insert
 	case:
 		ok = false
 	}
