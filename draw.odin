@@ -170,7 +170,9 @@ draw_screen :: proc(s: ^Screen, mgr: ^Manager) {
 		cmode: GlyphMode = {}
 
 		for x in 0 ..< view_w {
-			g := row[x]
+			g := blank_glyph(s)
+			if x < len(row) do g = row[x]
+
 			sel := false
 			if s.is_selecting && y >= sy_min && y <= sy_max {
 				if y > sy_min && y < sy_max {
