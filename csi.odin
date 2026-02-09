@@ -1,44 +1,51 @@
 package smut
 
 import "core:fmt"
+import "core:strconv"
+import "core:sys/posix"
 import "core:unicode/utf8"
 
 ALT_SCREEN :: 1049
 
-CAN :: 0x18 // Cancel
-SUB :: 0x1a // Substitute
+CAN :: 0x18
+SUB :: 0x1a
+ESC :: 27
+BACKSPACE :: 8
+BEL :: '\a'
+DEL :: 127
+CONTROLC0 :: 32
 
 Esc :: enum u8 {
-	RIS = 'c', // Reset to Initial State	
-	IND = 'D', // Index (Move down)
-	RI  = 'M', // Reverse Index (Move Up)
+	RIS = 'c',
+	IND = 'D',
+	RI  = 'M',
 }
 
 Csi :: enum u8 {
-	DA      = 'c', // Device Attributes
-	DSR     = 'n', // Device Status Report
-	ICH     = '@', // Insert Character
-	CUU     = 'A', // Cursor Up
-	CUD     = 'B', // Cursor Down
-	CUF     = 'C', // Cursor Forward
-	CUB     = 'D', // Cursor Backward
-	VPA     = 'd', // Vertical Position Absolute
-	CHA     = 'G', // Cursor Horizontal Absolute
-	CUP     = 'H', // Cursor Position
-	HVP     = 'f', // Horizontal Vertical Position
-	ED      = 'J', // Erase in Display
-	EL      = 'K', // Erase in Line
-	IL      = 'L', // Insert Line
-	DL      = 'M', // Delete Line
-	DCH     = 'P', // Delete Character
-	SU      = 'S', // Scroll Up
-	SD      = 'T', // Scroll Down
-	ECH     = 'X', // Erase Character
-	SGR     = 'm', // Select Graphic Rendition
-	SM      = 'h', // Set Mode
-	RM      = 'l', // Reset Mode
-	DECSUSR = 'q', // Set Cursor Style
-	DECSTBM = 'r', // Set Scrolling Region
+	DA      = 'c',
+	DSR     = 'n',
+	ICH     = '@',
+	CUU     = 'A',
+	CUD     = 'B',
+	CUF     = 'C',
+	CUB     = 'D',
+	VPA     = 'd',
+	CHA     = 'G',
+	CUP     = 'H',
+	HVP     = 'f',
+	ED      = 'J',
+	EL      = 'K',
+	IL      = 'L',
+	DL      = 'M',
+	DCH     = 'P',
+	SU      = 'S',
+	SD      = 'T',
+	ECH     = 'X',
+	SGR     = 'm',
+	SM      = 'h',
+	RM      = 'l',
+	DECSUSR = 'q',
+	DECSTBM = 'r',
 }
 
 parser_clear :: proc(s: ^Screen) {
@@ -78,14 +85,11 @@ handle_utf8_input :: proc(s: ^Screen, b: u8) {
 		write_rune_to_grid(s, r, s.in_alt_screen ? s.width : s.width - GUTTER_W)
 		s.utf8_len = 0
 	} else if width == 0 || width == 1 && s.utf8_len >= 4 {
-		// Invalid or stuck, reset
 		s.utf8_len = 0
 	}
 }
 
-
-handle_ansi_byte :: proc(s: ^Screen, b: u8) {
-	// Early Escape for High Priority Control Characters (Executable anywhere)
+handle_ansi_byte :: proc(s: ^Screen, b: u8, fd: posix.FD) {
 	if b == CAN || b == SUB {
 		s.ansi_state = .Ground
 		return
@@ -137,7 +141,7 @@ handle_ansi_byte :: proc(s: ^Screen, b: u8) {
 			s.parser_private = rune(b)
 			s.ansi_state = .CSI_Param
 		case 0x40 ..= 0x7E:
-			handle_csi_dispatch(s, b)
+			handle_csi_dispatch(s, b, fd)
 			s.ansi_state = .Ground
 		case:
 			if b >= 0x20 && b <= 0x2F {
@@ -156,7 +160,7 @@ handle_ansi_byte :: proc(s: ^Screen, b: u8) {
 			parser_push_param(s)
 		case 0x40 ..= 0x7E:
 			parser_push_param(s)
-			handle_csi_dispatch(s, b)
+			handle_csi_dispatch(s, b, fd)
 			s.ansi_state = .Ground
 		case:
 			if b >= 0x20 && b <= 0x2F {
@@ -171,7 +175,7 @@ handle_ansi_byte :: proc(s: ^Screen, b: u8) {
 	case .CSI_Intermediate:
 		switch b {
 		case 0x40 ..= 0x7E:
-			handle_csi_dispatch(s, b)
+			handle_csi_dispatch(s, b, fd)
 			s.ansi_state = .Ground
 		case:
 			if !(b >= 0x20 && b <= 0x2F) {
@@ -188,7 +192,7 @@ handle_ansi_byte :: proc(s: ^Screen, b: u8) {
 		if b == BEL {
 			handle_osc_dispatch(s)
 			s.ansi_state = .Ground
-		} else if b == ESC { 	// Possible ST (ESC \)
+		} else if b == ESC {
 			handle_osc_dispatch(s)
 			s.ansi_state = .Escape
 		} else {
@@ -196,18 +200,15 @@ handle_ansi_byte :: proc(s: ^Screen, b: u8) {
 		}
 
 	case:
-		// Fallback for DCS/SOS states not fully implemented
 		if b == BEL || b == ESC {
 			s.ansi_state = .Ground
 		}
 	}
 }
 
-
 handle_esc_dispatch :: proc(s: ^Screen, b: u8) {
 	switch cast(Esc)b {
 	case .RIS:
-	// NOTE(Vivek): Full Reset logic would go here
 	case .IND:
 		handle_control_char(s, '\n', s.width)
 	case .RI:
@@ -216,10 +217,9 @@ handle_esc_dispatch :: proc(s: ^Screen, b: u8) {
 }
 
 handle_osc_dispatch :: proc(s: ^Screen) {
-	// NOTE(Vivek): Window Title handling etc.
 }
 
-handle_csi_dispatch :: proc(s: ^Screen, final: u8) {
+handle_csi_dispatch :: proc(s: ^Screen, final: u8, fd: posix.FD) {
 	params := s.parser_params[:]
 
 	get_p :: proc(p: []int, idx: int, def: int) -> int {
@@ -234,15 +234,9 @@ handle_csi_dispatch :: proc(s: ^Screen, final: u8) {
 	switch cast(Csi)final {
 	case .DA:
 		if s.parser_private == '>' {
-			// Secondary Device Attribute 
-			// Request: CSI > c
-			// Response: CSI > 41 ; 350 ; 0 c (VT420 / xterm compatible)
 			resp := "\x1b[>41;350;0c"
 			append(&s.reply_buf, ..transmute([]u8)resp)
 		} else {
-			// Primary Device Attribute
-			// Request: CSI c
-			// Response: CSI ? 62 ; c (VT220)
 			resp := "\x1b[?62;c"
 			append(&s.reply_buf, ..transmute([]u8)resp)
 		}
@@ -250,11 +244,9 @@ handle_csi_dispatch :: proc(s: ^Screen, final: u8) {
 		status := get_p(params, 0, 0)
 		switch status {
 		case 5:
-			// Report Status OK
 			resp := "\x1b[0n"
 			append(&s.reply_buf, ..transmute([]u8)resp)
 		case 6:
-			// CPR - Cursor Position Report
 			r := s.cursor_y + 1
 			c := s.cursor_x + 1
 			resp := fmt.tprintf("\x1b[%d;%dR", r, c)
@@ -262,9 +254,6 @@ handle_csi_dispatch :: proc(s: ^Screen, final: u8) {
 		}
 	case .ICH:
 		handle_insert_char(s, get_p(params, 0, 1))
-
-	// NOTE(Vivek): needs to be mode aware to avoid arrow key forcing pty change in
-	// non insert mode
 	case .CUU:
 		dist := get_p(params, 0, 1)
 		s.cursor_y = max(0, s.cursor_y - dist)
@@ -296,9 +285,7 @@ handle_csi_dispatch :: proc(s: ^Screen, final: u8) {
 	case .IL:
 		handle_insert_lines(s, get_p(params, 0, 1))
 	case .DL:
-		if s.parser_private == '<' {
-			// Mouse Release
-		} else {
+		if s.parser_private != '<' {
 			handle_delete_lines(s, get_p(params, 0, 1))
 		}
 	case .DCH:
@@ -325,9 +312,15 @@ handle_csi_dispatch :: proc(s: ^Screen, final: u8) {
 				blank := blank_glyph(s)
 				for i in 0 ..< len(s.alt_grid) {s.alt_grid[i] = blank}
 				for i in 0 ..< len(s.dirty) {s.dirty[i] = true}
-				resize_screen(s, master_fd)
+				resize_screen(s, fd)
 			} else if mode == 25 {
 				s.cursor_visible = true
+			} else if mode == 1000 {
+				s.mouse_mode = .X10
+			} else if mode == 1002 {
+				s.mouse_mode = .ButtonEvent
+			} else if mode == 1003 {
+				s.mouse_mode = .AnyEvent
 			}
 		}
 	case .RM:
@@ -338,19 +331,19 @@ handle_csi_dispatch :: proc(s: ^Screen, final: u8) {
 				s.cursor_x = s.main_cursor_x
 				s.cursor_y = s.main_cursor_y
 				for i in 0 ..< s.height {s.dirty[i] = true}
-				resize_screen(s, master_fd)
+				resize_screen(s, fd)
 			} else if mode == 25 {
 				s.cursor_visible = false
+			} else if mode == 1000 || mode == 1002 || mode == 1003 {
+				s.mouse_mode = .None
 			}
 		}
 	case .DECSUSR:
-		// Sequence : CSI Ps SP q
 		if s.parser_intermediate == ' ' {
 			style := get_p(params, 0, 0)
 			s.cursor_style = style
 		}
 	case .DECSTBM:
-		// DECSTBM
 		top := get_p(params, 0, 1)
 		bot := get_p(params, 1, s.height)
 		s.scroll_top = clamp(top - 1, 0, s.height - 1)
@@ -361,8 +354,6 @@ handle_csi_dispatch :: proc(s: ^Screen, final: u8) {
 	s.pty_cursor_x = s.cursor_x
 	s.pty_cursor_y = s.cursor_y
 }
-
-// --- Text Modification Helpers ---
 
 handle_insert_char :: proc(s: ^Screen, n: int) {
 	if n <= 0 do return
@@ -424,8 +415,6 @@ handle_erase_char :: proc(s: ^Screen, n: int) {
 	s.dirty[s.cursor_y] = true
 }
 
-// --- Line Modification Helpers ---
-
 handle_insert_lines :: proc(s: ^Screen, n: int) {
 	if s.cursor_y < s.scroll_top || s.cursor_y > s.scroll_bottom do return
 	grid := s.in_alt_screen ? s.alt_grid : s.grid
@@ -485,44 +474,85 @@ handle_erase_in_line :: proc(s: ^Screen, mode: int) {
 	grid := s.in_alt_screen ? s.alt_grid : s.grid
 	blank := blank_glyph(s)
 
+	CURSORTOEND :: 0
+	STARTTOCURSOR :: 1
+	WHOLELINE :: 2
 	switch mode {
-	case 0:
-		// Cursor to end
+	case CURSORTOEND:
 		for x in s.cursor_x ..< s.width {grid[row_start + x] = blank}
-	case 1:
-		// Start to cursor
+	case STARTTOCURSOR:
 		for x in 0 ..< s.cursor_x + 1 {grid[row_start + x] = blank}
-	case 2:
-		// Whole line
+	case WHOLELINE:
 		for x in 0 ..< s.width {grid[row_start + x] = blank}
 	}
 	s.dirty[s.cursor_y] = true
 }
-
 handle_erase_in_display :: proc(s: ^Screen, mode: int) {
 	grid := s.in_alt_screen ? s.alt_grid : s.grid
 	blank := blank_glyph(s)
+	CURSORTOENDOFSCREEN :: 0
+	WHOLESCREEN :: 2
 	switch mode {
-	case 0:
-		// Cursor to end of screen
+	case CURSORTOENDOFSCREEN:
 		handle_erase_in_line(s, 0)
 		for y in s.cursor_y + 1 ..< s.height - 1 {
 			for x in 0 ..< s.width {grid[y * s.width + x] = blank}
 			s.dirty[y] = true
 		}
-	case 2:
-		// Whole screen
+	case WHOLESCREEN:
 		for i in 0 ..< len(grid) {grid[i] = blank}
 		for i in 0 ..< s.height {s.dirty[i] = true}
 	}
 }
 
-blank_glyph :: proc(s: ^Screen) -> Glyph {
-	return Glyph {
-		char = 0,
-		fg = s.current_attr.fg,
-		bg = s.current_attr.bg,
-		mode = s.current_attr.mode,
+forward_mouse_request :: proc(m: MouseMode, seq: []u8, fd: posix.FD) -> bool {
+	if m != .None {
+		posix.write(fd, &seq[0], len(seq))
+		return true
+	}
+	return false
+}
+
+// SGR: \x1b[<button;x;yM
+handle_mouse_sequence :: proc(s: ^Screen, seq: []u8, fd: posix.FD) {
+	if forward_mouse_request(s.mouse_mode, seq, fd) do return
+
+	if s.mode != .Motion do return
+
+	curr := 3
+
+	// b
+	start := curr
+	for curr < len(seq) && seq[curr] >= '0' && seq[curr] <= '9' do curr += 1
+	b_str := string(seq[start:curr])
+
+	if curr >= len(seq) || seq[curr] != ';' do return
+	curr += 1
+
+	// x
+	start = curr
+	for curr < len(seq) && seq[curr] >= '0' && seq[curr] <= '9' do curr += 1
+
+	if curr >= len(seq) || seq[curr] != ';' do return
+	curr += 1
+
+	// y
+	start = curr
+	for curr < len(seq) && seq[curr] >= '0' && seq[curr] <= '9' do curr += 1
+
+	// M
+	if curr < len(seq) && seq[curr] == 'M' {
+		b, ok := strconv.parse_int(b_str)
+		if !ok do return
+
+		if b == SCROLLUP {
+			limit := len(s.scrollback)
+			s.scroll_offset = min(limit, s.scroll_offset + 3)
+			s.needs_redraw = true
+		} else if b == SCROLLDOWN {
+			s.scroll_offset = max(0, s.scroll_offset - 3)
+			s.needs_redraw = true
+		}
 	}
 }
 

@@ -20,33 +20,42 @@ yank_selection :: proc(s: ^Screen) {
 }
 
 capture_selection_text :: proc(s: ^Screen) -> string {
-	builder := strings.builder_make()
+	b := strings.builder_make()
 
-	y_min := min(s.selection_start_y, s.cursor_y)
-	y_max := max(s.selection_start_y, s.cursor_y)
-	max_col := max(1, s.width - GUTTER_W)
+	sy, ey := s.selection_start_y, s.cursor_y
+	sx, ex := s.selection_start_x, s.cursor_x
 
-	for y in y_min ..< y_max + 1 {
-		line_offset := y * s.width
-		content_length := 0
+	// Normalize coords
+	if sy > ey || (sy == ey && sx > ex) {
+		sy, ey = ey, sy
+		sx, ex = ex, sx
+	}
 
-		for x in 0 ..< max_col {
-			if s.grid[line_offset + x].char != 0 {
-				content_length = x + 1
-			}
+	width := max(1, s.width - GUTTER_W)
+
+	for y in sy ..= ey {
+		row_off := y * s.width
+		start_col := (y == sy) ? sx : 0
+		end_col := (y == ey) ? ex : width - 1
+
+		// Clamp to actual line content
+		content_len := 0
+		for x in 0 ..< width {
+			if s.grid[row_off + x].char != 0 do content_len = x + 1
 		}
 
-		for x in 0 ..< content_length {
-			glyph := s.grid[line_offset + x]
-			strings.write_rune(&builder, glyph.char)
+		iter_end := min(end_col, content_len - 1)
+
+		for x in start_col ..= iter_end {
+			strings.write_rune(&b, s.grid[row_off + x].char)
 		}
 
-		if y < y_max {
-			strings.write_byte(&builder, '\n')
+		if y < ey {
+			strings.write_byte(&b, '\n')
 		}
 	}
 
-	return strings.to_string(builder)
+	return strings.to_string(b)
 }
 
 emit_osc52_sequence :: proc(text: string) {

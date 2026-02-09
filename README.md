@@ -21,6 +21,10 @@ Mode Switch Key (Ctrl a)
 - scroll messes with gutter display if not at current line
 - decide if scroll should move cursor with it (probably not)
 - implement b, B, e, E, t, T, f, F (almost)
+- differential rendering to speed up display
+- lines wrap around if > 80
+- resize to smaller box will delete characters originally outside new box
+- resizing when scrolling midway through history causes crash
 - implement goto mode (maybe just make this current line specific?)
 - implement vim style Select Mode in Select Mode (almost)
 - Kitty Graphics Protocol (is it even necessary?)
