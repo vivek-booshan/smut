@@ -4,7 +4,6 @@ import "core:fmt"
 import "core:os"
 import "core:path/filepath"
 import "core:strings"
-// import "core:sys/darwin"
 import "core:sys/posix"
 import "core:time"
 
@@ -230,3 +229,4 @@ close_tab :: proc(mgr: ^Manager, idx: int) {
 	ordered_remove(&mgr.tabs, idx)
 	if mgr.active >= len(mgr.tabs) do mgr.active = max(0, len(mgr.tabs) - 1)
 }
+

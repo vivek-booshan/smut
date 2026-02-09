@@ -14,7 +14,6 @@ package smut
 
 import "core:fmt"
 import "core:strings"
-// import "core:sys/darwin"
 import "core:sys/posix"
 
 MAX_SCROLLBACK :: 8192
@@ -321,3 +320,4 @@ blank_glyph :: proc(s: ^Screen) -> Glyph {
 		mode = s.current_attr.mode,
 	}
 }
+
