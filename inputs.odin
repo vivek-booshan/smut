@@ -4,6 +4,9 @@ import "core:strconv"
 import "core:sys/posix"
 import "core:unicode/utf8"
 
+SCROLLUP :: 64
+SCROLLDOWN :: 65
+
 Motion :: enum u8 {
 	None     = 0,
 	Down     = 'j',
@@ -26,8 +29,7 @@ Motion :: enum u8 {
 	Yank     = 'y',
 	GotoEnd  = 'G',
 	Insert   = 'i',
-	Esc      = KEY_ESC,
-	Leader   = KEY_LEADER,
+	Esc      = 27,
 }
 
 handle_input :: proc(s: ^Screen, input: []u8, fd: posix.FD) -> Action {
@@ -45,7 +47,7 @@ handle_input :: proc(s: ^Screen, input: []u8, fd: posix.FD) -> Action {
 		b := data[i]
 
 		if b == KEY_ESC && i + 2 < len(data) && data[i + 1] == '[' && data[i + 2] == '<' {
-			end_idx := 1
+			end_idx := -1
 			for j := i + 3; j < len(data); j += 1 {
 				if data[j] == 'M' || data[j] == 'm' {
 					end_idx = j
@@ -55,7 +57,7 @@ handle_input :: proc(s: ^Screen, input: []u8, fd: posix.FD) -> Action {
 			if end_idx != -1 {
 				seq := data[i:end_idx + 1]
 				handle_mouse_sequence(s, seq, fd)
-				i = end_idx + 1
+				i = end_idx
 				continue
 			} else {
 				if len(s.input_buf) == 0 do append(&s.input_buf, ..data[i:])
@@ -63,10 +65,7 @@ handle_input :: proc(s: ^Screen, input: []u8, fd: posix.FD) -> Action {
 			}
 		}
 
-
-		key := Motion(b)
-
-		if key == .Leader {
+		if b == KEY_LEADER {
 			s.mode = .Switch
 			s.cmd_idx = 0
 			act = .Redraw
@@ -78,11 +77,22 @@ handle_input :: proc(s: ^Screen, input: []u8, fd: posix.FD) -> Action {
 			continue
 		}
 
-		if key == .Esc {
-			if s.in_alt_screen do break
+		if b == KEY_ESC {
+			// NOTE(Vivek): steal lone esc back in non-insert
+			// Not sure if this is ideal or if we should enforce esc as 'q'
+			// in other modes and remove this
+			if (s.mode != .Insert) {
+				if i + 1 == len(data) {
+					handle_motion(s, .Esc, 1)
+					continue
+				}
+			}
+
 			if !s.in_alt_screen {
 				process_output(s, input[i:i + 1], fd)
 				continue
+			} else {
+				break
 			}
 		}
 
@@ -92,7 +102,6 @@ handle_input :: proc(s: ^Screen, input: []u8, fd: posix.FD) -> Action {
 		}
 
 		act = .Redraw
-
 		switch s.mode {
 		case .Switch:
 			#partial switch cast(Action)b {
@@ -116,7 +125,7 @@ handle_input :: proc(s: ^Screen, input: []u8, fd: posix.FD) -> Action {
 		case .Motion, .Visual:
 			buffer_key(s, rune(b))
 			count := parse_count(s)
-			handle_motion(s, key, count)
+			handle_motion(s, cast(Motion)b, count)
 
 		case .Insert:
 			posix.write(fd, &b, 1)
@@ -127,9 +136,6 @@ handle_input :: proc(s: ^Screen, input: []u8, fd: posix.FD) -> Action {
 	return act
 }
 
-handle_mouse_sequence :: proc(s: ^Screen, seq: []u8, fd: posix.FD) {
-
-}
 
 handle_motion :: proc(s: ^Screen, m: Motion, count: int) {
 	ok := true
@@ -176,8 +182,12 @@ handle_motion :: proc(s: ^Screen, m: Motion, count: int) {
 		s.cursor_x = s.pty_cursor_x
 		s.cursor_y = s.pty_cursor_y
 	case .Esc:
-		s.is_selecting = false
-		s.mode = .Insert
+		if s.is_selecting {
+			s.is_selecting = false
+			s.cmd_idx = 0
+		} else {
+			s.mode = .Insert
+		}
 	case:
 		ok = false
 	}

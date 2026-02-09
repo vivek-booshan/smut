@@ -1,6 +1,7 @@
 package smut
 
 import "core:fmt"
+import "core:strconv"
 import "core:sys/posix"
 import "core:unicode/utf8"
 
@@ -354,8 +355,6 @@ handle_csi_dispatch :: proc(s: ^Screen, final: u8, fd: posix.FD) {
 	s.pty_cursor_y = s.cursor_y
 }
 
-// --- Text Modification Helpers ---
-
 handle_insert_char :: proc(s: ^Screen, n: int) {
 	if n <= 0 do return
 	grid := s.in_alt_screen ? s.alt_grid : s.grid
@@ -416,8 +415,6 @@ handle_erase_char :: proc(s: ^Screen, n: int) {
 	s.dirty[s.cursor_y] = true
 }
 
-// --- Line Modification Helpers ---
-
 handle_insert_lines :: proc(s: ^Screen, n: int) {
 	if s.cursor_y < s.scroll_top || s.cursor_y > s.scroll_bottom do return
 	grid := s.in_alt_screen ? s.alt_grid : s.grid
@@ -477,35 +474,85 @@ handle_erase_in_line :: proc(s: ^Screen, mode: int) {
 	grid := s.in_alt_screen ? s.alt_grid : s.grid
 	blank := blank_glyph(s)
 
+	CURSORTOEND :: 0
+	STARTTOCURSOR :: 1
+	WHOLELINE :: 2
 	switch mode {
-	case 0:
-		// Cursor to end
+	case CURSORTOEND:
 		for x in s.cursor_x ..< s.width {grid[row_start + x] = blank}
-	case 1:
-		// Start to cursor
+	case STARTTOCURSOR:
 		for x in 0 ..< s.cursor_x + 1 {grid[row_start + x] = blank}
-	case 2:
-		// Whole line
+	case WHOLELINE:
 		for x in 0 ..< s.width {grid[row_start + x] = blank}
 	}
 	s.dirty[s.cursor_y] = true
 }
-
 handle_erase_in_display :: proc(s: ^Screen, mode: int) {
 	grid := s.in_alt_screen ? s.alt_grid : s.grid
 	blank := blank_glyph(s)
+	CURSORTOENDOFSCREEN :: 0
+	WHOLESCREEN :: 2
 	switch mode {
-	case 0:
-		// Cursor to end of screen
+	case CURSORTOENDOFSCREEN:
 		handle_erase_in_line(s, 0)
 		for y in s.cursor_y + 1 ..< s.height - 1 {
 			for x in 0 ..< s.width {grid[y * s.width + x] = blank}
 			s.dirty[y] = true
 		}
-	case 2:
-		// Whole screen
+	case WHOLESCREEN:
 		for i in 0 ..< len(grid) {grid[i] = blank}
 		for i in 0 ..< s.height {s.dirty[i] = true}
+	}
+}
+
+forward_mouse_request :: proc(m: MouseMode, seq: []u8, fd: posix.FD) -> bool {
+	if m != .None {
+		posix.write(fd, &seq[0], len(seq))
+		return true
+	}
+	return false
+}
+
+// SGR: \x1b[<button;x;yM
+handle_mouse_sequence :: proc(s: ^Screen, seq: []u8, fd: posix.FD) {
+	if forward_mouse_request(s.mouse_mode, seq, fd) do return
+
+	if s.mode != .Motion do return
+
+	curr := 3
+
+	// b
+	start := curr
+	for curr < len(seq) && seq[curr] >= '0' && seq[curr] <= '9' do curr += 1
+	b_str := string(seq[start:curr])
+
+	if curr >= len(seq) || seq[curr] != ';' do return
+	curr += 1
+
+	// x
+	start = curr
+	for curr < len(seq) && seq[curr] >= '0' && seq[curr] <= '9' do curr += 1
+
+	if curr >= len(seq) || seq[curr] != ';' do return
+	curr += 1
+
+	// y
+	start = curr
+	for curr < len(seq) && seq[curr] >= '0' && seq[curr] <= '9' do curr += 1
+
+	// M
+	if curr < len(seq) && seq[curr] == 'M' {
+		b, ok := strconv.parse_int(b_str)
+		if !ok do return
+
+		if b == SCROLLUP {
+			limit := len(s.scrollback)
+			s.scroll_offset = min(limit, s.scroll_offset + 3)
+			s.needs_redraw = true
+		} else if b == SCROLLDOWN {
+			s.scroll_offset = max(0, s.scroll_offset - 3)
+			s.needs_redraw = true
+		}
 	}
 }
 
