@@ -76,8 +76,10 @@ main :: proc() {
 					continue loop
 				case .NextTab:
 					manager.active = (manager.active + 1) % len(manager.tabs)
+					continue loop
 				case .PrevTab:
 					manager.active = (manager.active - 1 + len(manager.tabs)) % len(manager.tabs)
+					continue loop
 				case .CloseTab:
 					close_tab(&manager, manager.active)
 					if len(manager.tabs) == 0 do break loop
