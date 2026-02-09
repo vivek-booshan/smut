@@ -14,7 +14,7 @@ package smut
 
 import "core:fmt"
 import "core:strings"
-import "core:sys/darwin"
+// import "core:sys/darwin"
 import "core:sys/posix"
 
 MAX_SCROLLBACK :: 8192
@@ -25,7 +25,7 @@ resize_screen :: proc(s: ^Screen, pty_fd: posix.FD) {
 	}
 	old_w, old_h := s.width, s.height
 
-	if darwin.syscall_ioctl(posix.STDOUT_FILENO, darwin.TIOCGWINSZ, &ws) != -1 && ws.r > 0 {
+	if ioctl(posix.STDOUT_FILENO, TIOCGWINSZ, &ws) != -1 && ws.r > 0 {
 		s.width, s.height = int(ws.c), int(ws.r)
 	} else {
 		s.width, s.height = 80, 24
@@ -321,4 +321,3 @@ blank_glyph :: proc(s: ^Screen) -> Glyph {
 		mode = s.current_attr.mode,
 	}
 }
-

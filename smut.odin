@@ -4,12 +4,14 @@ import "core:fmt"
 import "core:os"
 import "core:path/filepath"
 import "core:strings"
-import "core:sys/darwin"
+// import "core:sys/darwin"
 import "core:sys/posix"
 import "core:time"
 
+TIOCGWINSZ :: 0x40087468 when ODIN_OS == .Darwin else 0x5413
 TIOCSWINSZ :: 0x80087467 when ODIN_OS == .Darwin else 0x5414
 TIOCSCTTY :: 0x20007461 when ODIN_OS == .Darwin else 0x540E
+
 SIGWINCH :: 28
 FRAME_TIME :: 5 * time.Millisecond
 
@@ -28,6 +30,7 @@ Manager :: struct {
 foreign import libc "system:c"
 foreign libc {
 	signal :: proc(sig: i32, handler: rawptr) -> rawptr ---
+	ioctl :: proc(fd: i32, request: u64, #c_vararg args: ..any) -> i32 ---
 }
 
 manager: Manager
@@ -174,7 +177,7 @@ openpty :: proc(adom, asub: ^posix.FD) -> int {
 
 login_tty :: proc(fd: posix.FD) {
 	posix.setsid()
-	darwin.syscall_ioctl(cast(i32)fd, TIOCSCTTY, nil)
+	ioctl(cast(i32)fd, TIOCSCTTY, nil)
 	posix.dup2(fd, 0);posix.dup2(fd, 1);posix.dup2(fd, 2)
 	if fd > 2 do posix.close(fd)
 }
@@ -183,7 +186,7 @@ set_window_size :: proc(fd: posix.FD, cols, rows: int) {
 	ws := struct {
 		r, c, x, y: u16,
 	}{u16(rows), u16(cols), 0, 0}
-	darwin.syscall_ioctl(cast(i32)fd, TIOCSWINSZ, &ws)
+	ioctl(cast(i32)fd, TIOCSWINSZ, &ws)
 }
 
 init_cursor :: proc(s: ^Screen) {
@@ -227,4 +230,3 @@ close_tab :: proc(mgr: ^Manager, idx: int) {
 	ordered_remove(&mgr.tabs, idx)
 	if mgr.active >= len(mgr.tabs) do mgr.active = max(0, len(mgr.tabs) - 1)
 }
-
