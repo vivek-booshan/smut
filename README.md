@@ -19,6 +19,7 @@ Mode Switch Key (Ctrl a)
 - streamline x1b magic strings to readable code
 - handle line wrapping
 - basic client-session with mkfifo
+- Investigate why throughput (compared to tmux) is faster on darwin and 4x slower on linux
 
 ### FIX
 - scroll messes with gutter display if not at current line
