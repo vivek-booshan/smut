@@ -50,10 +50,10 @@ MouseMode :: enum {
 }
 
 Glyph :: struct {
+	mode: GlyphMode,
 	char: rune,
 	fg:   u32,
 	bg:   u32,
-	mode: GlyphMode,
 }
 
 DEFAULT_FG :: 999

@@ -52,10 +52,17 @@ main :: proc() {
 	loop: for len(manager.tabs) > 0 {
 		active := &manager.tabs[manager.active]
 
-		if should_resize {
-			should_resize = false
-			resize_screen(active.screen, active.fd)
-			fmt.print("\x1b[2J")
+		timeout: i32 = -1
+		now := time.now()
+
+		if active.screen.needs_redraw || should_resize {
+			elapsed := time.diff(last_draw_time, now)
+			if elapsed >= FRAME_TIME {
+				timeout = 0 // Frame overdue, poll non-blocking
+			} else {
+				remaining := FRAME_TIME - elapsed
+				timeout = i32(time.duration_milliseconds(remaining))
+			}
 		}
 
 		fds := make([dynamic]posix.pollfd, context.temp_allocator)
@@ -64,7 +71,7 @@ main :: proc() {
 			append(&fds, posix.pollfd{fd = t.fd, events = {.IN, .HUP, .ERR}})
 		}
 
-		if posix.poll(raw_data(fds), cast(u32)len(fds), 5) < 0 do continue
+		if posix.poll(raw_data(fds), cast(u32)len(fds), timeout) < 0 do continue
 
 		if .IN in fds[0].revents {
 			n := posix.read(posix.STDIN_FILENO, &buf[0], len(buf))
@@ -93,10 +100,7 @@ main :: proc() {
 
 		if len(manager.tabs) == 0 do break loop
 
-		tabs_polled := len(fds) - 1
-		for i := tabs_polled - 1; i >= 0; i -= 1 {
-			if i >= len(manager.tabs) do continue
-
+		for i := len(manager.tabs) - 1; i >= 0; i -= 1 {
 			revents := fds[i + 1].revents
 			t := &manager.tabs[i]
 
@@ -124,17 +128,23 @@ main :: proc() {
 			}
 		}
 
-		now := time.now()
+		now = time.now()
 		if (active.screen.needs_redraw || should_resize) &&
 		   len(manager.tabs) > 0 &&
 		   time.diff(last_draw_time, now) >= FRAME_TIME {
+
+			if should_resize {
+				should_resize = false
+				resize_screen(active.screen, active.fd)
+				fmt.print("\x1b[2J")
+			}
+
 			draw_screen(active.screen, &manager)
 			active.screen.needs_redraw = false
 			last_draw_time = now
 		}
 	}
 }
-
 
 setup_terminal :: proc() {
 	t: posix.termios
