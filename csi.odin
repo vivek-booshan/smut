@@ -49,29 +49,32 @@ Csi :: enum u8 {
 }
 
 parser_clear :: proc(s: ^Screen) {
-	clear(&s.parser_params)
-	s.parser_current_param = 0
-	s.parser_has_param = false
-	s.parser_private = 0
-	s.parser_intermediate = 0
+	s.parser = {}
+	// s.parser_nargs = 0
+	// s.parser_params = 0
+	// s.parser_current_param = 0
+	// s.parser_has_param = false
+	// s.parser_private = 0
+	// s.parser_intermediate = 0
 }
 
 parser_collect_param :: proc(s: ^Screen, b: u8) {
-	if !s.parser_has_param {
-		s.parser_has_param = true
-		s.parser_current_param = 0
+	if !s.parser.has_param {
+		s.parser.has_param = true
+		s.parser.current_param = 0
 	}
-	s.parser_current_param = (s.parser_current_param * 10) + int(b - '0')
+	s.parser.current_param = (s.parser.current_param * 10) + int(b - '0')
 }
 
 parser_push_param :: proc(s: ^Screen) {
-	if s.parser_has_param {
-		append(&s.parser_params, s.parser_current_param)
+	if s.parser.has_param {
+		s.parser.params[s.parser.nargs] = s.parser.current_param
 	} else {
-		append(&s.parser_params, 0)
+		s.parser.params[s.parser.nargs] = 0
 	}
-	s.parser_current_param = 0
-	s.parser_has_param = false
+	s.parser.nargs += 1
+	s.parser.current_param = 0
+	s.parser.has_param = false
 }
 
 handle_utf8_input :: proc(s: ^Screen, b: u8) {
@@ -116,7 +119,7 @@ handle_ansi_byte :: proc(s: ^Screen, b: u8, fd: posix.FD) {
 			else if b == ']' do s.ansi_state = .OSC_String
 			else do s.ansi_state = .SOS_PM_APC_String
 		case ' ', '#', '%', '(', ')', '*', '+', '-', '.', '/':
-			s.parser_intermediate = rune(b)
+			s.parser.intermediate = rune(b)
 			s.ansi_state = .Escape_Intermediate
 		case:
 			handle_esc_dispatch(s, b)
@@ -138,14 +141,14 @@ handle_ansi_byte :: proc(s: ^Screen, b: u8, fd: posix.FD) {
 			parser_push_param(s)
 			s.ansi_state = .CSI_Param
 		case '<', '=', '>', '?':
-			s.parser_private = rune(b)
+			s.parser.private = rune(b)
 			s.ansi_state = .CSI_Param
 		case 0x40 ..= 0x7E:
 			handle_csi_dispatch(s, b, fd)
 			s.ansi_state = .Ground
 		case:
 			if b >= 0x20 && b <= 0x2F {
-				s.parser_intermediate = rune(b)
+				s.parser.intermediate = rune(b)
 				s.ansi_state = .CSI_Intermediate
 			} else {
 				s.ansi_state = .CSI_Ignore
@@ -165,7 +168,7 @@ handle_ansi_byte :: proc(s: ^Screen, b: u8, fd: posix.FD) {
 		case:
 			if b >= 0x20 && b <= 0x2F {
 				parser_push_param(s)
-				s.parser_intermediate = rune(b)
+				s.parser.intermediate = rune(b)
 				s.ansi_state = .CSI_Intermediate
 			} else {
 				s.ansi_state = .CSI_Ignore
@@ -220,7 +223,8 @@ handle_osc_dispatch :: proc(s: ^Screen) {
 }
 
 handle_csi_dispatch :: proc(s: ^Screen, final: u8, fd: posix.FD) {
-	params := s.parser_params[:]
+	parser := s.parser
+	params := parser.params[:parser.nargs]
 
 	get_p :: proc(p: []int, idx: int, def: int) -> int {
 		if idx < len(p) {
@@ -233,7 +237,7 @@ handle_csi_dispatch :: proc(s: ^Screen, final: u8, fd: posix.FD) {
 
 	switch cast(Csi)final {
 	case .DA:
-		if s.parser_private == '>' {
+		if parser.private == '>' {
 			resp := "\x1b[>41;350;0c"
 			append(&s.reply_buf, ..transmute([]u8)resp)
 		} else {
@@ -285,7 +289,7 @@ handle_csi_dispatch :: proc(s: ^Screen, final: u8, fd: posix.FD) {
 	case .IL:
 		handle_insert_lines(s, get_p(params, 0, 1))
 	case .DL:
-		if s.parser_private != '<' {
+		if parser.private != '<' {
 			handle_delete_lines(s, get_p(params, 0, 1))
 		}
 	case .DCH:
@@ -297,9 +301,9 @@ handle_csi_dispatch :: proc(s: ^Screen, final: u8, fd: posix.FD) {
 	case .ECH:
 		handle_erase_char(s, get_p(params, 0, 1))
 	case .SGR:
-		handle_sgr_sequence(s, params)
+		handle_sgr_sequence(&s.current_attr, params)
 	case .SM:
-		if s.parser_private == '?' {
+		if parser.private == '?' {
 			mode := get_p(params, 0, 0)
 			if mode == ALT_SCREEN && !s.in_alt_screen {
 				s.in_alt_screen = true
@@ -324,7 +328,7 @@ handle_csi_dispatch :: proc(s: ^Screen, final: u8, fd: posix.FD) {
 			}
 		}
 	case .RM:
-		if s.parser_private == '?' {
+		if parser.private == '?' {
 			mode := get_p(params, 0, 0)
 			if mode == ALT_SCREEN && s.in_alt_screen {
 				s.in_alt_screen = false
@@ -339,7 +343,7 @@ handle_csi_dispatch :: proc(s: ^Screen, final: u8, fd: posix.FD) {
 			}
 		}
 	case .DECSUSR:
-		if s.parser_intermediate == ' ' {
+		if parser.intermediate == ' ' {
 			style := get_p(params, 0, 0)
 			s.cursor.style = cast(CursorStyle)style
 		}
