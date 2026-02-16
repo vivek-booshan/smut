@@ -1,6 +1,6 @@
 package smut
 
-GUTTER_W :: 5
+GUTTER_W :: 6
 
 KEY_ESC :: 27
 KEY_LEADER :: 1
