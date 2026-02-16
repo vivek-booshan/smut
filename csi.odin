@@ -212,7 +212,7 @@ handle_esc_dispatch :: proc(s: ^Screen, b: u8) {
 	case .IND:
 		handle_control_char(s, '\n', s.width)
 	case .RI:
-		s.cursor_y = max(0, s.cursor_y - 1)
+		s.cursor.y = max(0, s.cursor.y - 1)
 	}
 }
 
@@ -247,8 +247,8 @@ handle_csi_dispatch :: proc(s: ^Screen, final: u8, fd: posix.FD) {
 			resp := "\x1b[0n"
 			append(&s.reply_buf, ..transmute([]u8)resp)
 		case 6:
-			r := s.cursor_y + 1
-			c := s.cursor_x + 1
+			r := s.cursor.y + 1
+			c := s.cursor.x + 1
 			resp := fmt.tprintf("\x1b[%d;%dR", r, c)
 			append(&s.reply_buf, ..transmute([]u8)resp)
 		}
@@ -256,28 +256,28 @@ handle_csi_dispatch :: proc(s: ^Screen, final: u8, fd: posix.FD) {
 		handle_insert_char(s, get_p(params, 0, 1))
 	case .CUU:
 		dist := get_p(params, 0, 1)
-		s.cursor_y = max(0, s.cursor_y - dist)
+		s.cursor.y = max(0, s.cursor.y - dist)
 	case .CUD:
 		dist := get_p(params, 0, 1)
 		limit := s.scroll_bottom > 0 ? s.scroll_bottom : s.height - 2
-		s.cursor_y = min(limit, s.cursor_y + dist)
+		s.cursor.y = min(limit, s.cursor.y + dist)
 	case .CUF:
 		dist := get_p(params, 0, 1)
-		s.cursor_x = min(s.width - 1, s.cursor_x + dist)
+		s.cursor.x = min(s.width - 1, s.cursor.x + dist)
 	case .CUB:
 		dist := get_p(params, 0, 1)
-		s.cursor_x = max(0, s.cursor_x - dist)
+		s.cursor.x = max(0, s.cursor.x - dist)
 	case .VPA:
 		r := get_p(params, 0, 1)
-		s.cursor_y = clamp(r - 1, 0, s.height - 1)
+		s.cursor.y = clamp(r - 1, 0, s.height - 1)
 	case .CHA:
 		c := get_p(params, 0, 1)
-		s.cursor_x = clamp(c - 1, 0, s.width - 1)
+		s.cursor.x = clamp(c - 1, 0, s.width - 1)
 	case .CUP, .HVP:
 		r := get_p(params, 0, 1)
 		c := get_p(params, 1, 1)
-		s.cursor_y = clamp(r - 1, 0, s.height - 2)
-		s.cursor_x = clamp(c - 1, 0, s.width - 1)
+		s.cursor.y = clamp(r - 1, 0, s.height - 2)
+		s.cursor.x = clamp(c - 1, 0, s.width - 1)
 	case .ED:
 		handle_erase_in_display(s, get_p(params, 0, 0))
 	case .EL:
@@ -303,12 +303,12 @@ handle_csi_dispatch :: proc(s: ^Screen, final: u8, fd: posix.FD) {
 			mode := get_p(params, 0, 0)
 			if mode == ALT_SCREEN && !s.in_alt_screen {
 				s.in_alt_screen = true
-				s.main_cursor_x = s.cursor_x
-				s.main_cursor_y = s.cursor_y
+				s.main_cursor.x = s.cursor.x
+				s.main_cursor.y = s.cursor.y
 				s.scroll_top = 0
 				s.scroll_bottom = s.height - 1
-				s.cursor_x, s.cursor_y = 0, 0
-				s.pty_cursor_x, s.pty_cursor_y = 0, 0
+				s.cursor.x, s.cursor.y = 0, 0
+				s.pty_cursor.x, s.pty_cursor.y = 0, 0
 				blank := blank_glyph(s)
 				for i in 0 ..< len(s.alt_grid) {s.alt_grid[i] = blank}
 				for i in 0 ..< len(s.dirty) {s.dirty[i] = true}
@@ -328,8 +328,8 @@ handle_csi_dispatch :: proc(s: ^Screen, final: u8, fd: posix.FD) {
 			mode := get_p(params, 0, 0)
 			if mode == ALT_SCREEN && s.in_alt_screen {
 				s.in_alt_screen = false
-				s.cursor_x = s.main_cursor_x
-				s.cursor_y = s.main_cursor_y
+				s.cursor.x = s.main_cursor.x
+				s.cursor.y = s.main_cursor.y
 				for i in 0 ..< s.height {s.dirty[i] = true}
 				resize_screen(s, fd)
 			} else if mode == 25 {
@@ -348,24 +348,24 @@ handle_csi_dispatch :: proc(s: ^Screen, final: u8, fd: posix.FD) {
 		bot := get_p(params, 1, s.height)
 		s.scroll_top = clamp(top - 1, 0, s.height - 1)
 		s.scroll_bottom = clamp(bot - 1, 0, s.height - 1)
-		s.cursor_x, s.cursor_y = 0, 0
+		s.cursor.x, s.cursor.y = 0, 0
 	}
 
-	s.pty_cursor_x = s.cursor_x
-	s.pty_cursor_y = s.cursor_y
+	s.pty_cursor.x = s.cursor.x
+	s.pty_cursor.y = s.cursor.y
 }
 
 handle_insert_char :: proc(s: ^Screen, n: int) {
 	if n <= 0 do return
 	grid := s.in_alt_screen ? s.alt_grid : s.grid
-	row_start := s.cursor_y * s.width
+	row_start := s.cursor.y * s.width
 
-	limit := min(n, s.width - s.cursor_x)
+	limit := min(n, s.width - s.cursor.x)
 	if limit <= 0 do return
 
-	src := row_start + s.cursor_x
-	dst := row_start + s.cursor_x + limit
-	count := s.width - (s.cursor_x + limit)
+	src := row_start + s.cursor.x
+	dst := row_start + s.cursor.x + limit
+	count := s.width - (s.cursor.x + limit)
 
 	if count > 0 {
 		copy(grid[dst:dst + count], grid[src:src + count])
@@ -375,20 +375,20 @@ handle_insert_char :: proc(s: ^Screen, n: int) {
 	for i in 0 ..< limit {
 		grid[src + i] = blank
 	}
-	s.dirty[s.cursor_y] = true
+	s.dirty[s.cursor.y] = true
 }
 
 handle_delete_char :: proc(s: ^Screen, n: int) {
 	if n <= 0 do return
 	grid := s.in_alt_screen ? s.alt_grid : s.grid
-	row_start := s.cursor_y * s.width
+	row_start := s.cursor.y * s.width
 
-	limit := min(n, s.width - s.cursor_x)
+	limit := min(n, s.width - s.cursor.x)
 	if limit <= 0 do return
 
-	src := row_start + s.cursor_x + limit
-	dst := row_start + s.cursor_x
-	count := s.width - (s.cursor_x + limit)
+	src := row_start + s.cursor.x + limit
+	dst := row_start + s.cursor.x
+	count := s.width - (s.cursor.x + limit)
 
 	if count > 0 {
 		copy(grid[dst:dst + count], grid[src:src + count])
@@ -399,28 +399,28 @@ handle_delete_char :: proc(s: ^Screen, n: int) {
 	for i in 0 ..< limit {
 		grid[clear_start + i] = blank
 	}
-	s.dirty[s.cursor_y] = true
+	s.dirty[s.cursor.y] = true
 }
 
 handle_erase_char :: proc(s: ^Screen, n: int) {
 	if n <= 0 do return
 	grid := s.in_alt_screen ? s.alt_grid : s.grid
-	row_start := s.cursor_y * s.width
-	limit := min(n, s.width - s.cursor_x)
+	row_start := s.cursor.y * s.width
+	limit := min(n, s.width - s.cursor.x)
 
 	blank := blank_glyph(s)
 	for i in 0 ..< limit {
-		grid[row_start + s.cursor_x + i] = blank
+		grid[row_start + s.cursor.x + i] = blank
 	}
-	s.dirty[s.cursor_y] = true
+	s.dirty[s.cursor.y] = true
 }
 
 handle_insert_lines :: proc(s: ^Screen, n: int) {
-	if s.cursor_y < s.scroll_top || s.cursor_y > s.scroll_bottom do return
+	if s.cursor.y < s.scroll_top || s.cursor.y > s.scroll_bottom do return
 	grid := s.in_alt_screen ? s.alt_grid : s.grid
-	num := min(n, s.scroll_bottom - s.cursor_y + 1)
+	num := min(n, s.scroll_bottom - s.cursor.y + 1)
 
-	for y := s.scroll_bottom; y >= s.cursor_y + num; y -= 1 {
+	for y := s.scroll_bottom; y >= s.cursor.y + num; y -= 1 {
 		dst := y * s.width
 		src := (y - num) * s.width
 		copy(grid[dst:dst + s.width], grid[src:src + s.width])
@@ -428,7 +428,7 @@ handle_insert_lines :: proc(s: ^Screen, n: int) {
 	}
 
 	blank := blank_glyph(s)
-	for y := s.cursor_y; y < s.cursor_y + num; y += 1 {
+	for y := s.cursor.y; y < s.cursor.y + num; y += 1 {
 		start := y * s.width
 		for x in 0 ..< s.width {grid[start + x] = blank}
 		s.dirty[y] = true
@@ -436,11 +436,11 @@ handle_insert_lines :: proc(s: ^Screen, n: int) {
 }
 
 handle_delete_lines :: proc(s: ^Screen, n: int) {
-	if s.cursor_y < s.scroll_top || s.cursor_y > s.scroll_bottom do return
+	if s.cursor.y < s.scroll_top || s.cursor.y > s.scroll_bottom do return
 	grid := s.in_alt_screen ? s.alt_grid : s.grid
-	num := min(n, s.scroll_bottom - s.cursor_y + 1)
+	num := min(n, s.scroll_bottom - s.cursor.y + 1)
 
-	for y := s.cursor_y; y <= s.scroll_bottom - num; y += 1 {
+	for y := s.cursor.y; y <= s.scroll_bottom - num; y += 1 {
 		dst := y * s.width
 		src := (y + num) * s.width
 		copy(grid[dst:dst + s.width], grid[src:src + s.width])
@@ -456,21 +456,21 @@ handle_delete_lines :: proc(s: ^Screen, n: int) {
 }
 
 handle_scroll_up :: proc(s: ^Screen, n: int) {
-	old_y := s.cursor_y
-	s.cursor_y = s.scroll_top
+	old_y := s.cursor.y
+	s.cursor.y = s.scroll_top
 	handle_delete_lines(s, n)
-	s.cursor_y = old_y
+	s.cursor.y = old_y
 }
 
 handle_scroll_down :: proc(s: ^Screen, n: int) {
-	old_y := s.cursor_y
-	s.cursor_y = s.scroll_top
+	old_y := s.cursor.y
+	s.cursor.y = s.scroll_top
 	handle_insert_lines(s, n)
-	s.cursor_y = old_y
+	s.cursor.y = old_y
 }
 
 handle_erase_in_line :: proc(s: ^Screen, mode: int) {
-	row_start := s.cursor_y * s.width
+	row_start := s.cursor.y * s.width
 	grid := s.in_alt_screen ? s.alt_grid : s.grid
 	blank := blank_glyph(s)
 
@@ -479,13 +479,13 @@ handle_erase_in_line :: proc(s: ^Screen, mode: int) {
 	WHOLELINE :: 2
 	switch mode {
 	case CURSORTOEND:
-		for x in s.cursor_x ..< s.width {grid[row_start + x] = blank}
+		for x in s.cursor.x ..< s.width {grid[row_start + x] = blank}
 	case STARTTOCURSOR:
-		for x in 0 ..< s.cursor_x + 1 {grid[row_start + x] = blank}
+		for x in 0 ..< s.cursor.x + 1 {grid[row_start + x] = blank}
 	case WHOLELINE:
 		for x in 0 ..< s.width {grid[row_start + x] = blank}
 	}
-	s.dirty[s.cursor_y] = true
+	s.dirty[s.cursor.y] = true
 }
 handle_erase_in_display :: proc(s: ^Screen, mode: int) {
 	grid := s.in_alt_screen ? s.alt_grid : s.grid
@@ -495,7 +495,7 @@ handle_erase_in_display :: proc(s: ^Screen, mode: int) {
 	switch mode {
 	case CURSORTOENDOFSCREEN:
 		handle_erase_in_line(s, 0)
-		for y in s.cursor_y + 1 ..< s.height - 1 {
+		for y in s.cursor.y + 1 ..< s.height - 1 {
 			for x in 0 ..< s.width {grid[y * s.width + x] = blank}
 			s.dirty[y] = true
 		}

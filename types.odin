@@ -1,9 +1,10 @@
 package smut
 
-GUTTER_W :: 5
+GUTTER_W :: 6
+MAX_SCROLLBACK :: 8192
+KEY_LEADER :: 1
 
 KEY_ESC :: 27
-KEY_LEADER :: 1
 
 Action :: enum {
 	None,
@@ -42,6 +43,14 @@ Mode :: enum {
 	Switch,
 }
 
+Cursor :: struct {
+	attr:  Glyph,
+	x:     int,
+	y:     int,
+	state: u8,
+	style: u8,
+}
+
 MouseMode :: enum {
 	None,
 	X10,
@@ -78,10 +87,9 @@ Screen :: struct {
 	dirty:                [dynamic]bool,
 	width:                int,
 	height:               int,
-	cursor_x:             int,
-	cursor_y:             int,
-	pty_cursor_x:         int,
-	pty_cursor_y:         int,
+	cursor:               Cursor,
+	pty_cursor:           Cursor,
+	main_cursor:          Cursor,
 	scroll_top:           int,
 	scroll_bottom:        int,
 	mode:                 Mode,
@@ -105,8 +113,6 @@ Screen :: struct {
 	reply_buf:            [dynamic]u8,
 	in_alt_screen:        bool,
 	alt_grid:             [dynamic]Glyph,
-	main_cursor_x:        int,
-	main_cursor_y:        int,
 	current_attr:         Glyph,
 	cursor_style:         int,
 	cursor_visible:       bool,
