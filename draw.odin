@@ -88,7 +88,7 @@ write_rune_to_grid :: proc(s: ^Screen, b: rune, current_w: int) {
 	grid := s.in_alt_screen ? s.alt_grid : s.grid
 
 	if idx < len(grid) {
-		grid[idx] = s.current_attr
+		grid[idx] = s.pty_cursor.attr
 		grid[idx].char = b
 		s.dirty[s.pty_cursor.y] = true
 	}
@@ -314,9 +314,9 @@ handle_control_char :: proc(s: ^Screen, b: rune, w: int) {
 blank_glyph :: proc(s: ^Screen) -> Glyph {
 	return Glyph {
 		char = 0,
-		fg = s.current_attr.fg,
-		bg = s.current_attr.bg,
-		mode = s.current_attr.mode,
+		fg = s.pty_cursor.attr.fg,
+		bg = s.pty_cursor.attr.bg,
+		mode = s.pty_cursor.attr.mode,
 	}
 }
 

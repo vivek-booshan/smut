@@ -301,14 +301,14 @@ handle_csi_dispatch :: proc(s: ^Screen, final: u8, fd: posix.FD) {
 	case .ECH:
 		handle_erase_char(s, get_p(params, 0, 1))
 	case .SGR:
-		handle_sgr_sequence(&s.current_attr, params)
+		handle_sgr_sequence(&s.pty_cursor.attr, params)
 	case .SM:
 		if parser.private == '?' {
 			mode := get_p(params, 0, 0)
 			if mode == ALT_SCREEN && !s.in_alt_screen {
 				s.in_alt_screen = true
-				s.main_cursor.x = s.cursor.x
-				s.main_cursor.y = s.cursor.y
+				s.saved_cursor.x = s.cursor.x
+				s.saved_cursor.y = s.cursor.y
 				s.scroll_top = 0
 				s.scroll_bottom = s.height - 1
 				s.cursor.x, s.cursor.y = 0, 0
@@ -332,8 +332,8 @@ handle_csi_dispatch :: proc(s: ^Screen, final: u8, fd: posix.FD) {
 			mode := get_p(params, 0, 0)
 			if mode == ALT_SCREEN && s.in_alt_screen {
 				s.in_alt_screen = false
-				s.cursor.x = s.main_cursor.x
-				s.cursor.y = s.main_cursor.y
+				s.cursor.x = s.saved_cursor.x
+				s.cursor.y = s.saved_cursor.y
 				for i in 0 ..< s.height {s.dirty[i] = true}
 				resize_screen(s, fd)
 			} else if mode == 25 {
