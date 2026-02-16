@@ -15,7 +15,13 @@ Mode Switch Key (Ctrl a)
 - Leader + Q : Quit
 - Leader + R : Refresh
 
-### TODO
+### TODO(OPTIMIZATION)
+- move from grid of glyphs to ring of lines
+- decouple view and data
+- SIMD optimization for ansi parsing
+- AoS to SoA of glyphs
+
+### TODO(FEATURES)
 - streamline x1b magic strings to readable code
 - handle line wrapping
 - basic client-session with mkfifo
