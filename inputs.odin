@@ -96,7 +96,7 @@ handle_input :: proc(s: ^Screen, input: []u8, fd: posix.FD) -> Action {
 			}
 		}
 
-		if s.ansi_state != .Ground {
+		if s.parser.state != .Ground {
 			handle_ansi_byte(s, b, fd)
 			continue
 		}

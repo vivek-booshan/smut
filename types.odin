@@ -62,11 +62,15 @@ Cursor :: struct {
 
 Parser :: struct {
 	params:        [16]int,
-	nargs:         u8,
 	current_param: int,
-	has_param:     bool,
+	osc_buf:       [dynamic]u8,
+	state:         AnsiState,
 	private:       rune,
 	intermediate:  rune,
+	utf8_buf:      [4]u8,
+	nargs:         u8,
+	utf8_len:      u8,
+	has_param:     bool,
 }
 
 MouseMode :: enum {
@@ -119,12 +123,8 @@ Screen :: struct {
 	scrollback:           [dynamic][]Glyph,
 	scroll_offset:        int,
 	total_lines_scrolled: int,
-	ansi_state:           AnsiState,
 	parser:               Parser,
-	utf8_buf:             [4]u8,
-	utf8_len:             int,
 	input_buf:            [dynamic]u8,
-	osc_buf:              [dynamic]u8,
 	reply_buf:            [dynamic]u8,
 	in_alt_screen:        bool,
 	alt_grid:             [dynamic]Glyph,

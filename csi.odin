@@ -50,12 +50,6 @@ Csi :: enum u8 {
 
 parser_clear :: proc(s: ^Screen) {
 	s.parser = {}
-	// s.parser_nargs = 0
-	// s.parser_params = 0
-	// s.parser_current_param = 0
-	// s.parser_has_param = false
-	// s.parser_private = 0
-	// s.parser_intermediate = 0
 }
 
 parser_collect_param :: proc(s: ^Screen, b: u8) {
@@ -63,7 +57,7 @@ parser_collect_param :: proc(s: ^Screen, b: u8) {
 		s.parser.has_param = true
 		s.parser.current_param = 0
 	}
-	s.parser.current_param = (s.parser.current_param * 10) + int(b - '0')
+	s.parser.current_param = (s.parser.current_param * 10) + cast(int)(b - '0')
 }
 
 parser_push_param :: proc(s: ^Screen) {
@@ -78,30 +72,30 @@ parser_push_param :: proc(s: ^Screen) {
 }
 
 handle_utf8_input :: proc(s: ^Screen, b: u8) {
-	if s.utf8_len < len(s.utf8_buf) {
-		s.utf8_buf[s.utf8_len] = b
-		s.utf8_len += 1
+	if s.parser.utf8_len < len(s.parser.utf8_buf) {
+		s.parser.utf8_buf[s.parser.utf8_len] = b
+		s.parser.utf8_len += 1
 	}
 
-	r, width := utf8.decode_rune(s.utf8_buf[:s.utf8_len])
+	r, width := utf8.decode_rune(s.parser.utf8_buf[:s.parser.utf8_len])
 	if r != utf8.RUNE_ERROR {
 		write_rune_to_grid(s, r, s.in_alt_screen ? s.width : s.width - GUTTER_W)
-		s.utf8_len = 0
-	} else if width == 0 || width == 1 && s.utf8_len >= 4 {
-		s.utf8_len = 0
+		s.parser.utf8_len = 0
+	} else if width == 0 || width == 1 && s.parser.utf8_len >= 4 {
+		s.parser.utf8_len = 0
 	}
 }
 
 handle_ansi_byte :: proc(s: ^Screen, b: u8, fd: posix.FD) {
 	if b == CAN || b == SUB {
-		s.ansi_state = .Ground
+		s.parser.state = .Ground
 		return
 	}
 
-	#partial switch s.ansi_state {
+	#partial switch s.parser.state {
 	case .Ground:
 		if b == ESC {
-			s.ansi_state = .Escape
+			s.parser.state = .Escape
 		} else if b < CONTROLC0 {
 			handle_control_char(s, rune(b), s.in_alt_screen ? s.width : s.width - GUTTER_W)
 		} else {
@@ -112,46 +106,46 @@ handle_ansi_byte :: proc(s: ^Screen, b: u8, fd: posix.FD) {
 		parser_clear(s)
 		switch b {
 		case '[':
-			s.ansi_state = .CSI_Entry
+			s.parser.state = .CSI_Entry
 		case ']', 'P', '^', '_':
-			clear(&s.osc_buf)
-			if b == 'P' do s.ansi_state = .DCS_Entry
-			else if b == ']' do s.ansi_state = .OSC_String
-			else do s.ansi_state = .SOS_PM_APC_String
+			clear(&s.parser.osc_buf)
+			if b == 'P' do s.parser.state = .DCS_Entry
+			else if b == ']' do s.parser.state = .OSC_String
+			else do s.parser.state = .SOS_PM_APC_String
 		case ' ', '#', '%', '(', ')', '*', '+', '-', '.', '/':
 			s.parser.intermediate = rune(b)
-			s.ansi_state = .Escape_Intermediate
+			s.parser.state = .Escape_Intermediate
 		case:
 			handle_esc_dispatch(s, b)
-			s.ansi_state = .Ground
+			s.parser.state = .Ground
 		}
 
 	case .Escape_Intermediate:
 		if b >= '0' && b <= '~' {
 			handle_esc_dispatch(s, b)
-			s.ansi_state = .Ground
+			s.parser.state = .Ground
 		}
 
 	case .CSI_Entry:
 		switch b {
 		case '0' ..= '9':
 			parser_collect_param(s, b)
-			s.ansi_state = .CSI_Param
+			s.parser.state = .CSI_Param
 		case ';', ':':
 			parser_push_param(s)
-			s.ansi_state = .CSI_Param
+			s.parser.state = .CSI_Param
 		case '<', '=', '>', '?':
 			s.parser.private = rune(b)
-			s.ansi_state = .CSI_Param
+			s.parser.state = .CSI_Param
 		case 0x40 ..= 0x7E:
 			handle_csi_dispatch(s, b, fd)
-			s.ansi_state = .Ground
+			s.parser.state = .Ground
 		case:
 			if b >= 0x20 && b <= 0x2F {
 				s.parser.intermediate = rune(b)
-				s.ansi_state = .CSI_Intermediate
+				s.parser.state = .CSI_Intermediate
 			} else {
-				s.ansi_state = .CSI_Ignore
+				s.parser.state = .CSI_Ignore
 			}
 		}
 
@@ -164,14 +158,14 @@ handle_ansi_byte :: proc(s: ^Screen, b: u8, fd: posix.FD) {
 		case 0x40 ..= 0x7E:
 			parser_push_param(s)
 			handle_csi_dispatch(s, b, fd)
-			s.ansi_state = .Ground
+			s.parser.state = .Ground
 		case:
 			if b >= 0x20 && b <= 0x2F {
 				parser_push_param(s)
 				s.parser.intermediate = rune(b)
-				s.ansi_state = .CSI_Intermediate
+				s.parser.state = .CSI_Intermediate
 			} else {
-				s.ansi_state = .CSI_Ignore
+				s.parser.state = .CSI_Ignore
 			}
 		}
 
@@ -179,32 +173,32 @@ handle_ansi_byte :: proc(s: ^Screen, b: u8, fd: posix.FD) {
 		switch b {
 		case 0x40 ..= 0x7E:
 			handle_csi_dispatch(s, b, fd)
-			s.ansi_state = .Ground
+			s.parser.state = .Ground
 		case:
 			if !(b >= 0x20 && b <= 0x2F) {
-				s.ansi_state = .CSI_Ignore
+				s.parser.state = .CSI_Ignore
 			}
 		}
 
 	case .CSI_Ignore:
 		if b >= 0x40 && b <= 0x7E {
-			s.ansi_state = .Ground
+			s.parser.state = .Ground
 		}
 
 	case .OSC_String:
 		if b == BEL {
 			handle_osc_dispatch(s)
-			s.ansi_state = .Ground
+			s.parser.state = .Ground
 		} else if b == ESC {
 			handle_osc_dispatch(s)
-			s.ansi_state = .Escape
+			s.parser.state = .Escape
 		} else {
-			append(&s.osc_buf, b)
+			append(&s.parser.osc_buf, b)
 		}
 
 	case:
 		if b == BEL || b == ESC {
-			s.ansi_state = .Ground
+			s.parser.state = .Ground
 		}
 	}
 }
@@ -222,18 +216,32 @@ handle_esc_dispatch :: proc(s: ^Screen, b: u8) {
 handle_osc_dispatch :: proc(s: ^Screen) {
 }
 
+get_p_int :: proc(p: []int, idx: int, def: int) -> int {
+	if idx < len(p) {
+		val := p[idx]
+		if val == 0 do return def
+		return val
+	}
+	return def
+}
+
+get_p_u16 :: proc(p: []u16, idx, def: int) -> int {
+	p_ints: []int
+	for i in 0 ..< len(p) {
+		p_ints[i] = int(p[i])
+	}
+	return get_p_int(p_ints, idx, def)
+}
+
+get_p :: proc {
+	get_p_int,
+	get_p_u16,
+}
+
 handle_csi_dispatch :: proc(s: ^Screen, final: u8, fd: posix.FD) {
 	parser := s.parser
 	params := parser.params[:parser.nargs]
 
-	get_p :: proc(p: []int, idx: int, def: int) -> int {
-		if idx < len(p) {
-			val := p[idx]
-			if val == 0 do return def
-			return val
-		}
-		return def
-	}
 
 	switch cast(Csi)final {
 	case .DA:
