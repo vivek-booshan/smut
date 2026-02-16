@@ -200,7 +200,7 @@ set_window_size :: proc(fd: posix.FD, cols, rows: int) {
 
 init_cursor :: proc(s: ^Screen) {
 	s.cursor_visible = true
-	s.cursor_style = 2
+	s.cursor.style = CursorStyle.Bar_Steady
 }
 
 spawn_tab :: proc(mgr: ^Manager) -> bool {

@@ -43,12 +43,21 @@ Mode :: enum {
 	Switch,
 }
 
+CursorStyle :: enum u8 {
+	Block_Blink      = 1,
+	Block_Steady     = 2,
+	Underline_Blink  = 3,
+	Underline_Steady = 4,
+	Bar_Blink        = 5,
+	Bar_Steady       = 6,
+}
+
 Cursor :: struct {
 	attr:  Glyph,
 	x:     int,
 	y:     int,
+	style: CursorStyle,
 	state: u8,
-	style: u8,
 }
 
 MouseMode :: enum {
@@ -109,15 +118,14 @@ Screen :: struct {
 	parser_intermediate:  rune,
 	utf8_buf:             [4]u8,
 	utf8_len:             int,
+	input_buf:            [dynamic]u8,
 	osc_buf:              [dynamic]u8,
 	reply_buf:            [dynamic]u8,
 	in_alt_screen:        bool,
 	alt_grid:             [dynamic]Glyph,
 	current_attr:         Glyph,
-	cursor_style:         int,
 	cursor_visible:       bool,
 	needs_redraw:         bool,
 	mouse_mode:           MouseMode,
-	input_buf:            [dynamic]u8,
 }
 

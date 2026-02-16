@@ -341,7 +341,7 @@ handle_csi_dispatch :: proc(s: ^Screen, final: u8, fd: posix.FD) {
 	case .DECSUSR:
 		if s.parser_intermediate == ' ' {
 			style := get_p(params, 0, 0)
-			s.cursor_style = style
+			s.cursor.style = cast(CursorStyle)style
 		}
 	case .DECSTBM:
 		top := get_p(params, 0, 1)
