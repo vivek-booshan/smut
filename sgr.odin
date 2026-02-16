@@ -23,9 +23,9 @@ SGR_Code :: enum int {
 	BG_DEFAULT     = 49,
 }
 
-handle_sgr_sequence :: proc(s: ^Screen, params: []int) {
+handle_sgr_sequence :: proc(attr: ^Glyph, params: []int) {
 	if len(params) == 0 {
-		reset_attr(s)
+		reset_attr(attr)
 		return
 	}
 
@@ -35,68 +35,68 @@ handle_sgr_sequence :: proc(s: ^Screen, params: []int) {
 
 		switch val {
 		case 30 ..= 37:
-			s.current_attr.fg = u32(val - 30)
+			attr.fg = u32(val - 30)
 			i += 1;continue
 		case 90 ..= 97:
-			s.current_attr.fg = u32(val - 90 + 8)
+			attr.fg = u32(val - 90 + 8)
 			i += 1;continue
 		case 40 ..= 47:
-			s.current_attr.bg = u32(val - 40)
+			attr.bg = u32(val - 40)
 			i += 1;continue
 		case 100 ..= 107:
-			s.current_attr.bg = u32(val - 100 + 8)
+			attr.bg = u32(val - 100 + 8)
 			i += 1;continue
 		}
 
 		code := SGR_Code(val)
 		switch code {
 		case .RESET:
-			reset_attr(s)
+			reset_attr(attr)
 		case .BOLD:
-			s.current_attr.mode += {.Bold}
+			attr.mode += {.Bold}
 		case .FAINT:
-			s.current_attr.mode += {.Faint}
+			attr.mode += {.Faint}
 		case .ITALIC:
-			s.current_attr.mode += {.Italic}
+			attr.mode += {.Italic}
 		case .UNDERLINE:
-			s.current_attr.mode += {.Underline}
+			attr.mode += {.Underline}
 		case .BLINK:
-			s.current_attr.mode += {.Blink}
+			attr.mode += {.Blink}
 		case .REVERSE:
-			s.current_attr.mode += {.Reverse}
+			attr.mode += {.Reverse}
 		case .INVISIBLE:
-			s.current_attr.mode += {.Invisible}
+			attr.mode += {.Invisible}
 		case .STRIKE:
-			s.current_attr.mode += {.StrikeThrough}
+			attr.mode += {.StrikeThrough}
 		case .NORMAL_WEIGHT:
-			s.current_attr.mode -= {.Bold, .Faint}
+			attr.mode -= {.Bold, .Faint}
 		case .NOT_ITALIC:
-			s.current_attr.mode -= {.Italic}
+			attr.mode -= {.Italic}
 		case .NOT_UNDERLINED:
-			s.current_attr.mode -= {.Underline}
+			attr.mode -= {.Underline}
 		case .NOT_BLINKING:
-			s.current_attr.mode -= {.Blink}
+			attr.mode -= {.Blink}
 		case .NOT_REVERSED:
-			s.current_attr.mode -= {.Reverse}
+			attr.mode -= {.Reverse}
 		case .NOT_INVISIBLE:
-			s.current_attr.mode -= {.Invisible}
+			attr.mode -= {.Invisible}
 		case .NOT_STRUCK:
-			s.current_attr.mode -= {.StrikeThrough}
+			attr.mode -= {.StrikeThrough}
 
 		case .FG_DEFAULT:
-			s.current_attr.fg = DEFAULT_FG
+			attr.fg = DEFAULT_FG
 		case .BG_DEFAULT:
-			s.current_attr.bg = DEFAULT_BG
+			attr.bg = DEFAULT_BG
 
 		case .FG_EXTENDED:
 			i += 1
 			if i < len(params) {
 				if params[i] == 5 && i + 1 < len(params) {
-					s.current_attr.fg = u32(params[i + 1])
+					attr.fg = u32(params[i + 1])
 					i += 1
 				} else if params[i] == 2 && i + 3 < len(params) {
 					r, g, b := u32(params[i + 1]), u32(params[i + 2]), u32(params[i + 3])
-					s.current_attr.fg = (r << 16) | (g << 8) | b
+					attr.fg = (r << 16) | (g << 8) | b
 					i += 3
 				}
 			}
@@ -104,11 +104,11 @@ handle_sgr_sequence :: proc(s: ^Screen, params: []int) {
 			i += 1
 			if i < len(params) {
 				if params[i] == 5 && i + 1 < len(params) {
-					s.current_attr.bg = u32(params[i + 1])
+					attr.bg = u32(params[i + 1])
 					i += 1
 				} else if params[i] == 2 && i + 3 < len(params) {
 					r, g, b := u32(params[i + 1]), u32(params[i + 2]), u32(params[i + 3])
-					s.current_attr.bg = (r << 16) | (g << 8) | b
+					attr.bg = (r << 16) | (g << 8) | b
 					i += 3
 				}
 			}
@@ -117,10 +117,10 @@ handle_sgr_sequence :: proc(s: ^Screen, params: []int) {
 	}
 }
 
-reset_attr :: proc(s: ^Screen) {
-	s.current_attr.fg = DEFAULT_FG
-	s.current_attr.bg = DEFAULT_BG
-	s.current_attr.mode = {}
-	s.current_attr.char = 0
+reset_attr :: proc(attr: ^Glyph) {
+	attr.fg = DEFAULT_FG
+	attr.bg = DEFAULT_BG
+	attr.mode = {}
+	attr.char = 0
 }
 
