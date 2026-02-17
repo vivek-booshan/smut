@@ -1,9 +1,10 @@
 package smut
 
 GUTTER_W :: 6
+MAX_SCROLLBACK :: 8192
+KEY_LEADER :: 1
 
 KEY_ESC :: 27
-KEY_LEADER :: 1
 
 Action :: enum {
 	None,
@@ -42,6 +43,36 @@ Mode :: enum {
 	Switch,
 }
 
+CursorStyle :: enum u8 {
+	Block_Blink      = 1,
+	Block_Steady     = 2,
+	Underline_Blink  = 3,
+	Underline_Steady = 4,
+	Bar_Blink        = 5,
+	Bar_Steady       = 6,
+}
+
+Cursor :: struct {
+	attr:  Glyph,
+	x:     int,
+	y:     int,
+	style: CursorStyle,
+	state: u8,
+}
+
+Parser :: struct {
+	params:        [16]int,
+	current_param: int,
+	osc_buf:       [dynamic]u8,
+	state:         AnsiState,
+	private:       rune,
+	intermediate:  rune,
+	utf8_buf:      [4]u8,
+	nargs:         u8,
+	utf8_len:      u8,
+	has_param:     bool,
+}
+
 MouseMode :: enum {
 	None,
 	X10,
@@ -78,10 +109,9 @@ Screen :: struct {
 	dirty:                [dynamic]bool,
 	width:                int,
 	height:               int,
-	cursor_x:             int,
-	cursor_y:             int,
-	pty_cursor_x:         int,
-	pty_cursor_y:         int,
+	cursor:               Cursor,
+	pty_cursor:           Cursor,
+	saved_cursor:         Cursor,
 	scroll_top:           int,
 	scroll_bottom:        int,
 	mode:                 Mode,
@@ -93,25 +123,13 @@ Screen :: struct {
 	scrollback:           [dynamic][]Glyph,
 	scroll_offset:        int,
 	total_lines_scrolled: int,
-	ansi_state:           AnsiState,
-	parser_params:        [dynamic]int,
-	parser_current_param: int,
-	parser_has_param:     bool,
-	parser_private:       rune,
-	parser_intermediate:  rune,
-	utf8_buf:             [4]u8,
-	utf8_len:             int,
-	osc_buf:              [dynamic]u8,
+	parser:               Parser,
+	input_buf:            [dynamic]u8,
 	reply_buf:            [dynamic]u8,
 	in_alt_screen:        bool,
 	alt_grid:             [dynamic]Glyph,
-	main_cursor_x:        int,
-	main_cursor_y:        int,
-	current_attr:         Glyph,
-	cursor_style:         int,
 	cursor_visible:       bool,
 	needs_redraw:         bool,
 	mouse_mode:           MouseMode,
-	input_buf:            [dynamic]u8,
 }
 

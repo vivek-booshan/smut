@@ -22,8 +22,8 @@ yank_selection :: proc(s: ^Screen) {
 capture_selection_text :: proc(s: ^Screen) -> string {
 	b := strings.builder_make()
 
-	sy, ey := s.selection_start_y, s.cursor_y
-	sx, ex := s.selection_start_x, s.cursor_x
+	sy, ey := s.selection_start_y, s.cursor.y
+	sx, ex := s.selection_start_x, s.cursor.x
 
 	// Normalize coords
 	if sy > ey || (sy == ey && sx > ex) {

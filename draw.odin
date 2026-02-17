@@ -16,7 +16,6 @@ import "core:fmt"
 import "core:strings"
 import "core:sys/posix"
 
-MAX_SCROLLBACK :: 8192
 
 resize_screen :: proc(s: ^Screen, pty_fd: posix.FD) {
 	ws: struct {
@@ -59,8 +58,8 @@ resize_screen :: proc(s: ^Screen, pty_fd: posix.FD) {
 		s.grid = new_grid
 		s.alt_grid = new_alt
 		s.dirty = new_dirty
-		s.cursor_x = clamp(s.cursor_x, 0, max(0, s.width - 1))
-		s.cursor_y = clamp(s.cursor_y, 0, max(0, s.height - 2))
+		s.cursor.x = clamp(s.cursor.x, 0, max(0, s.width - 1))
+		s.cursor.y = clamp(s.cursor.y, 0, max(0, s.height - 2))
 	}
 
 	for i in 0 ..< s.height do if i < len(s.dirty) do s.dirty[i] = true
@@ -75,36 +74,36 @@ process_output :: proc(s: ^Screen, data: []u8, fd: posix.FD) {
 
 write_rune_to_grid :: proc(s: ^Screen, b: rune, current_w: int) {
 	limit := s.height - 2
-	if s.pty_cursor_x >= current_w {
-		s.pty_cursor_x = 0
-		s.pty_cursor_y += 1
+	if s.pty_cursor.x >= current_w {
+		s.pty_cursor.x = 0
+		s.pty_cursor.y += 1
 		handle_scrolling(s)
 	}
-	if s.pty_cursor_y > limit {
-		s.pty_cursor_y = limit
+	if s.pty_cursor.y > limit {
+		s.pty_cursor.y = limit
 		handle_scrolling(s)
 	}
 
-	idx := (s.pty_cursor_y * s.width) + s.pty_cursor_x
+	idx := (s.pty_cursor.y * s.width) + s.pty_cursor.x
 	grid := s.in_alt_screen ? s.alt_grid : s.grid
 
 	if idx < len(grid) {
-		grid[idx] = s.current_attr
+		grid[idx] = s.pty_cursor.attr
 		grid[idx].char = b
-		s.dirty[s.pty_cursor_y] = true
+		s.dirty[s.pty_cursor.y] = true
 	}
 
-	s.pty_cursor_x += 1
-	s.cursor_x = s.pty_cursor_x
-	s.cursor_y = s.pty_cursor_y
+	s.pty_cursor.x += 1
+	s.cursor.x = s.pty_cursor.x
+	s.cursor.y = s.pty_cursor.y
 }
 
 handle_scrolling :: proc(s: ^Screen) {
 	limit :=
 		(s.scroll_bottom > 0 && s.scroll_bottom < s.height - 1) ? s.scroll_bottom : s.height - 2
-	if s.cursor_y <= limit do return
+	if s.cursor.y <= limit do return
 
-	s.cursor_y = limit
+	s.cursor.y = limit
 	if !s.in_alt_screen && s.scroll_top == 0 {
 		line := make([]Glyph, s.width)
 		copy(line, s.grid[0:s.width])
@@ -138,16 +137,16 @@ draw_screen :: proc(s: ^Screen, mgr: ^Manager) {
 
 	sy_min, sy_max, sx_start, sx_end := 0, 0, 0, 0
 	if s.is_selecting {
-		if s.selection_start_y < s.cursor_y {
-			sy_min, sy_max = s.selection_start_y, s.cursor_y
-			sx_start, sx_end = s.selection_start_x, s.cursor_x
-		} else if s.selection_start_y > s.cursor_y {
-			sy_min, sy_max = s.cursor_y, s.selection_start_y
-			sx_start, sx_end = s.cursor_x, s.selection_start_x
+		if s.selection_start_y < s.cursor.y {
+			sy_min, sy_max = s.selection_start_y, s.cursor.y
+			sx_start, sx_end = s.selection_start_x, s.cursor.x
+		} else if s.selection_start_y > s.cursor.y {
+			sy_min, sy_max = s.cursor.y, s.selection_start_y
+			sx_start, sx_end = s.cursor.x, s.selection_start_x
 		} else {
-			sy_min, sy_max = s.cursor_y, s.cursor_y
-			sx_start = min(s.selection_start_x, s.cursor_x)
-			sx_end = max(s.selection_start_x, s.cursor_x)
+			sy_min, sy_max = s.cursor.y, s.cursor.y
+			sx_start = min(s.selection_start_x, s.cursor.x)
+			sx_end = max(s.selection_start_x, s.cursor.x)
 		}
 	}
 
@@ -211,10 +210,10 @@ draw_screen :: proc(s: ^Screen, mgr: ^Manager) {
 
 	if s.cursor_visible {
 		off := s.in_alt_screen ? 1 : (1 + GUTTER_W)
-		fmt.sbprintf(&b, "\x1b[%d;%dH\x1b[?25h", s.cursor_y + 1, s.cursor_x + off)
+		fmt.sbprintf(&b, "\x1b[%d;%dH\x1b[?25h", s.cursor.y + 1, s.cursor.x + off)
 
-		style := s.cursor_style == 0 ? 2 : s.cursor_style
-		fmt.sbprintf(&b, "\x1b[%d q", style)
+		// style := s.cursor.style == 0 ? Block : s.cursor.style
+		fmt.sbprintf(&b, "\x1b[%d q", cast(int)s.cursor.style)
 	} else {
 		fmt.sbprint(&b, "\x1b[?25l")
 	}
@@ -252,12 +251,12 @@ draw_status_bar :: proc(b: ^strings.Builder, s: ^Screen, mgr: ^Manager) {
 
 draw_gutter :: proc(b: ^strings.Builder, s: ^Screen, y, abs_line: int, hist: bool) {
 	live := abs_line - s.total_lines_scrolled - 1
-	if hist || (live >= 0 && live <= s.pty_cursor_y) {
+	if hist || (live >= 0 && live <= s.pty_cursor.y) {
 		w := GUTTER_W - 1
-		if y == s.cursor_y {
+		if y == s.cursor.y {
 			fmt.sbprintf(b, "\x1b[33;49m%*d \x1b[0m", w, abs_line)
 		} else {
-			fmt.sbprintf(b, "\x1b[90;49m%*d \x1b[0m", w, abs(y - s.cursor_y))
+			fmt.sbprintf(b, "\x1b[90;49m%*d \x1b[0m", w, abs(y - s.cursor.y))
 		}
 	} else {
 		fmt.sbprintf(b, "\x1b[49m%*s", GUTTER_W, "")
@@ -291,33 +290,33 @@ render_color :: proc(b: ^strings.Builder, col: u32, is_fg: bool) {
 handle_control_char :: proc(s: ^Screen, b: rune, w: int) {
 	switch b {
 	case 8, 127:
-		if s.cursor_x > 0 {
-			s.cursor_x -= 1
-			s.dirty[s.cursor_y] = true
+		if s.cursor.x > 0 {
+			s.cursor.x -= 1
+			s.dirty[s.cursor.y] = true
 		}
-		s.pty_cursor_x = s.cursor_x
+		s.pty_cursor.x = s.cursor.x
 	case '\t':
-		s.cursor_x = (s.cursor_x + 8) & ~int(7)
-		if s.cursor_x >= w do s.cursor_x = w - 1
-		if s.cursor_y < len(s.dirty) do s.dirty[s.cursor_y] = true
-		s.pty_cursor_x = s.cursor_x
+		s.cursor.x = (s.cursor.x + 8) & ~int(7)
+		if s.cursor.x >= w do s.cursor.x = w - 1
+		if s.cursor.y < len(s.dirty) do s.dirty[s.cursor.y] = true
+		s.pty_cursor.x = s.cursor.x
 	case '\n':
-		s.cursor_y += 1
+		s.cursor.y += 1
 		handle_scrolling(s)
-		s.pty_cursor_y = s.cursor_y
-		if s.cursor_y < len(s.dirty) do s.dirty[s.cursor_y] = true
+		s.pty_cursor.y = s.cursor.y
+		if s.cursor.y < len(s.dirty) do s.dirty[s.cursor.y] = true
 	case '\r':
-		s.cursor_x = 0
-		s.pty_cursor_x = 0
+		s.cursor.x = 0
+		s.pty_cursor.x = 0
 	}
 }
 
 blank_glyph :: proc(s: ^Screen) -> Glyph {
 	return Glyph {
 		char = 0,
-		fg = s.current_attr.fg,
-		bg = s.current_attr.bg,
-		mode = s.current_attr.mode,
+		fg = s.pty_cursor.attr.fg,
+		bg = s.pty_cursor.attr.bg,
+		mode = s.pty_cursor.attr.mode,
 	}
 }
 

@@ -96,7 +96,7 @@ handle_input :: proc(s: ^Screen, input: []u8, fd: posix.FD) -> Action {
 			}
 		}
 
-		if s.ansi_state != .Ground {
+		if s.parser.state != .Ground {
 			handle_ansi_byte(s, b, fd)
 			continue
 		}
@@ -112,8 +112,8 @@ handle_input :: proc(s: ^Screen, input: []u8, fd: posix.FD) -> Action {
 			case .Insert:
 				s.mode = .Insert
 				s.scroll_offset = 0
-				s.cursor_x = s.pty_cursor_x
-				s.cursor_y = s.pty_cursor_y
+				s.cursor.x = s.pty_cursor.x
+				s.cursor.y = s.pty_cursor.y
 				s.is_selecting = false
 				s.cmd_idx = 0
 			case .CreateTab, .CloseTab, .Redraw, .Quit:
@@ -151,24 +151,24 @@ handle_motion :: proc(s: ^Screen, m: Motion, count: int) {
 	case .HalfPgUp:
 		move_vert(s, -(h * count))
 	case .Left:
-		s.cursor_x = max(0, s.cursor_x - count)
+		s.cursor.x = max(0, s.cursor.x - count)
 	case .Right:
-		s.cursor_x = min(s.width - 1, s.cursor_x + count)
+		s.cursor.x = min(s.width - 1, s.cursor.x + count)
 	case .Line:
 		if !s.is_selecting {
-			s.selection_start_y = s.cursor_y
+			s.selection_start_y = s.cursor.y
 		}
 		if count > 1 || s.is_selecting {
-			s.cursor_y = min(s.pty_cursor_y, s.cursor_y + count)
+			s.cursor.y = min(s.pty_cursor.y, s.cursor.y + count)
 		}
 		s.is_selecting = true
 
 	case .LineBack:
 		if !s.is_selecting {
-			s.selection_start_y = s.cursor_y
+			s.selection_start_y = s.cursor.y
 		}
 		if count > 1 || s.is_selecting {
-			s.cursor_y = max(0, s.cursor_y - count)
+			s.cursor.y = max(0, s.cursor.y - count)
 		}
 		s.is_selecting = true
 	case .Yank:
@@ -179,8 +179,8 @@ handle_motion :: proc(s: ^Screen, m: Motion, count: int) {
 		}
 	case .GotoEnd:
 		s.scroll_offset = 0
-		s.cursor_x = s.pty_cursor_x
-		s.cursor_y = s.pty_cursor_y
+		s.cursor.x = s.pty_cursor.x
+		s.cursor.y = s.pty_cursor.y
 	case .Esc:
 		if s.is_selecting {
 			s.is_selecting = false
@@ -196,19 +196,19 @@ handle_motion :: proc(s: ^Screen, m: Motion, count: int) {
 }
 
 move_vert :: proc(s: ^Screen, n: int) {
-	dest := s.cursor_y + n
+	dest := s.cursor.y + n
 	if n > 0 {
-		if dest <= s.pty_cursor_y {
-			s.cursor_y = dest
+		if dest <= s.pty_cursor.y {
+			s.cursor.y = dest
 		} else {
-			s.cursor_y = s.pty_cursor_y
+			s.cursor.y = s.pty_cursor.y
 			s.scroll_offset = max(0, s.scroll_offset - n)
 		}
 	} else {
 		if dest >= 0 {
-			s.cursor_y = dest
+			s.cursor.y = dest
 		} else {
-			s.cursor_y = 0
+			s.cursor.y = 0
 			limit := len(s.scrollback)
 			s.scroll_offset = min(limit, s.scroll_offset - n)
 		}

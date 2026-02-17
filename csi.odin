@@ -49,56 +49,53 @@ Csi :: enum u8 {
 }
 
 parser_clear :: proc(s: ^Screen) {
-	clear(&s.parser_params)
-	s.parser_current_param = 0
-	s.parser_has_param = false
-	s.parser_private = 0
-	s.parser_intermediate = 0
+	s.parser = {}
 }
 
 parser_collect_param :: proc(s: ^Screen, b: u8) {
-	if !s.parser_has_param {
-		s.parser_has_param = true
-		s.parser_current_param = 0
+	if !s.parser.has_param {
+		s.parser.has_param = true
+		s.parser.current_param = 0
 	}
-	s.parser_current_param = (s.parser_current_param * 10) + int(b - '0')
+	s.parser.current_param = (s.parser.current_param * 10) + cast(int)(b - '0')
 }
 
 parser_push_param :: proc(s: ^Screen) {
-	if s.parser_has_param {
-		append(&s.parser_params, s.parser_current_param)
+	if s.parser.has_param {
+		s.parser.params[s.parser.nargs] = s.parser.current_param
 	} else {
-		append(&s.parser_params, 0)
+		s.parser.params[s.parser.nargs] = 0
 	}
-	s.parser_current_param = 0
-	s.parser_has_param = false
+	s.parser.nargs += 1
+	s.parser.current_param = 0
+	s.parser.has_param = false
 }
 
 handle_utf8_input :: proc(s: ^Screen, b: u8) {
-	if s.utf8_len < len(s.utf8_buf) {
-		s.utf8_buf[s.utf8_len] = b
-		s.utf8_len += 1
+	if s.parser.utf8_len < len(s.parser.utf8_buf) {
+		s.parser.utf8_buf[s.parser.utf8_len] = b
+		s.parser.utf8_len += 1
 	}
 
-	r, width := utf8.decode_rune(s.utf8_buf[:s.utf8_len])
+	r, width := utf8.decode_rune(s.parser.utf8_buf[:s.parser.utf8_len])
 	if r != utf8.RUNE_ERROR {
 		write_rune_to_grid(s, r, s.in_alt_screen ? s.width : s.width - GUTTER_W)
-		s.utf8_len = 0
-	} else if width == 0 || width == 1 && s.utf8_len >= 4 {
-		s.utf8_len = 0
+		s.parser.utf8_len = 0
+	} else if width == 0 || width == 1 && s.parser.utf8_len >= 4 {
+		s.parser.utf8_len = 0
 	}
 }
 
 handle_ansi_byte :: proc(s: ^Screen, b: u8, fd: posix.FD) {
 	if b == CAN || b == SUB {
-		s.ansi_state = .Ground
+		s.parser.state = .Ground
 		return
 	}
 
-	#partial switch s.ansi_state {
+	#partial switch s.parser.state {
 	case .Ground:
 		if b == ESC {
-			s.ansi_state = .Escape
+			s.parser.state = .Escape
 		} else if b < CONTROLC0 {
 			handle_control_char(s, rune(b), s.in_alt_screen ? s.width : s.width - GUTTER_W)
 		} else {
@@ -109,46 +106,46 @@ handle_ansi_byte :: proc(s: ^Screen, b: u8, fd: posix.FD) {
 		parser_clear(s)
 		switch b {
 		case '[':
-			s.ansi_state = .CSI_Entry
+			s.parser.state = .CSI_Entry
 		case ']', 'P', '^', '_':
-			clear(&s.osc_buf)
-			if b == 'P' do s.ansi_state = .DCS_Entry
-			else if b == ']' do s.ansi_state = .OSC_String
-			else do s.ansi_state = .SOS_PM_APC_String
+			clear(&s.parser.osc_buf)
+			if b == 'P' do s.parser.state = .DCS_Entry
+			else if b == ']' do s.parser.state = .OSC_String
+			else do s.parser.state = .SOS_PM_APC_String
 		case ' ', '#', '%', '(', ')', '*', '+', '-', '.', '/':
-			s.parser_intermediate = rune(b)
-			s.ansi_state = .Escape_Intermediate
+			s.parser.intermediate = rune(b)
+			s.parser.state = .Escape_Intermediate
 		case:
 			handle_esc_dispatch(s, b)
-			s.ansi_state = .Ground
+			s.parser.state = .Ground
 		}
 
 	case .Escape_Intermediate:
 		if b >= '0' && b <= '~' {
 			handle_esc_dispatch(s, b)
-			s.ansi_state = .Ground
+			s.parser.state = .Ground
 		}
 
 	case .CSI_Entry:
 		switch b {
 		case '0' ..= '9':
 			parser_collect_param(s, b)
-			s.ansi_state = .CSI_Param
+			s.parser.state = .CSI_Param
 		case ';', ':':
 			parser_push_param(s)
-			s.ansi_state = .CSI_Param
+			s.parser.state = .CSI_Param
 		case '<', '=', '>', '?':
-			s.parser_private = rune(b)
-			s.ansi_state = .CSI_Param
+			s.parser.private = rune(b)
+			s.parser.state = .CSI_Param
 		case 0x40 ..= 0x7E:
 			handle_csi_dispatch(s, b, fd)
-			s.ansi_state = .Ground
+			s.parser.state = .Ground
 		case:
 			if b >= 0x20 && b <= 0x2F {
-				s.parser_intermediate = rune(b)
-				s.ansi_state = .CSI_Intermediate
+				s.parser.intermediate = rune(b)
+				s.parser.state = .CSI_Intermediate
 			} else {
-				s.ansi_state = .CSI_Ignore
+				s.parser.state = .CSI_Ignore
 			}
 		}
 
@@ -161,14 +158,14 @@ handle_ansi_byte :: proc(s: ^Screen, b: u8, fd: posix.FD) {
 		case 0x40 ..= 0x7E:
 			parser_push_param(s)
 			handle_csi_dispatch(s, b, fd)
-			s.ansi_state = .Ground
+			s.parser.state = .Ground
 		case:
 			if b >= 0x20 && b <= 0x2F {
 				parser_push_param(s)
-				s.parser_intermediate = rune(b)
-				s.ansi_state = .CSI_Intermediate
+				s.parser.intermediate = rune(b)
+				s.parser.state = .CSI_Intermediate
 			} else {
-				s.ansi_state = .CSI_Ignore
+				s.parser.state = .CSI_Ignore
 			}
 		}
 
@@ -176,32 +173,32 @@ handle_ansi_byte :: proc(s: ^Screen, b: u8, fd: posix.FD) {
 		switch b {
 		case 0x40 ..= 0x7E:
 			handle_csi_dispatch(s, b, fd)
-			s.ansi_state = .Ground
+			s.parser.state = .Ground
 		case:
 			if !(b >= 0x20 && b <= 0x2F) {
-				s.ansi_state = .CSI_Ignore
+				s.parser.state = .CSI_Ignore
 			}
 		}
 
 	case .CSI_Ignore:
 		if b >= 0x40 && b <= 0x7E {
-			s.ansi_state = .Ground
+			s.parser.state = .Ground
 		}
 
 	case .OSC_String:
 		if b == BEL {
 			handle_osc_dispatch(s)
-			s.ansi_state = .Ground
+			s.parser.state = .Ground
 		} else if b == ESC {
 			handle_osc_dispatch(s)
-			s.ansi_state = .Escape
+			s.parser.state = .Escape
 		} else {
-			append(&s.osc_buf, b)
+			append(&s.parser.osc_buf, b)
 		}
 
 	case:
 		if b == BEL || b == ESC {
-			s.ansi_state = .Ground
+			s.parser.state = .Ground
 		}
 	}
 }
@@ -212,28 +209,43 @@ handle_esc_dispatch :: proc(s: ^Screen, b: u8) {
 	case .IND:
 		handle_control_char(s, '\n', s.width)
 	case .RI:
-		s.cursor_y = max(0, s.cursor_y - 1)
+		s.cursor.y = max(0, s.cursor.y - 1)
 	}
 }
 
 handle_osc_dispatch :: proc(s: ^Screen) {
 }
 
-handle_csi_dispatch :: proc(s: ^Screen, final: u8, fd: posix.FD) {
-	params := s.parser_params[:]
-
-	get_p :: proc(p: []int, idx: int, def: int) -> int {
-		if idx < len(p) {
-			val := p[idx]
-			if val == 0 do return def
-			return val
-		}
-		return def
+get_p_int :: proc(p: []int, idx: int, def: int) -> int {
+	if idx < len(p) {
+		val := p[idx]
+		if val == 0 do return def
+		return val
 	}
+	return def
+}
+
+get_p_u16 :: proc(p: []u16, idx, def: int) -> int {
+	p_ints: []int
+	for i in 0 ..< len(p) {
+		p_ints[i] = int(p[i])
+	}
+	return get_p_int(p_ints, idx, def)
+}
+
+get_p :: proc {
+	get_p_int,
+	get_p_u16,
+}
+
+handle_csi_dispatch :: proc(s: ^Screen, final: u8, fd: posix.FD) {
+	parser := s.parser
+	params := parser.params[:parser.nargs]
+
 
 	switch cast(Csi)final {
 	case .DA:
-		if s.parser_private == '>' {
+		if parser.private == '>' {
 			resp := "\x1b[>41;350;0c"
 			append(&s.reply_buf, ..transmute([]u8)resp)
 		} else {
@@ -247,8 +259,8 @@ handle_csi_dispatch :: proc(s: ^Screen, final: u8, fd: posix.FD) {
 			resp := "\x1b[0n"
 			append(&s.reply_buf, ..transmute([]u8)resp)
 		case 6:
-			r := s.cursor_y + 1
-			c := s.cursor_x + 1
+			r := s.cursor.y + 1
+			c := s.cursor.x + 1
 			resp := fmt.tprintf("\x1b[%d;%dR", r, c)
 			append(&s.reply_buf, ..transmute([]u8)resp)
 		}
@@ -256,28 +268,28 @@ handle_csi_dispatch :: proc(s: ^Screen, final: u8, fd: posix.FD) {
 		handle_insert_char(s, get_p(params, 0, 1))
 	case .CUU:
 		dist := get_p(params, 0, 1)
-		s.cursor_y = max(0, s.cursor_y - dist)
+		s.cursor.y = max(0, s.cursor.y - dist)
 	case .CUD:
 		dist := get_p(params, 0, 1)
 		limit := s.scroll_bottom > 0 ? s.scroll_bottom : s.height - 2
-		s.cursor_y = min(limit, s.cursor_y + dist)
+		s.cursor.y = min(limit, s.cursor.y + dist)
 	case .CUF:
 		dist := get_p(params, 0, 1)
-		s.cursor_x = min(s.width - 1, s.cursor_x + dist)
+		s.cursor.x = min(s.width - 1, s.cursor.x + dist)
 	case .CUB:
 		dist := get_p(params, 0, 1)
-		s.cursor_x = max(0, s.cursor_x - dist)
+		s.cursor.x = max(0, s.cursor.x - dist)
 	case .VPA:
 		r := get_p(params, 0, 1)
-		s.cursor_y = clamp(r - 1, 0, s.height - 1)
+		s.cursor.y = clamp(r - 1, 0, s.height - 1)
 	case .CHA:
 		c := get_p(params, 0, 1)
-		s.cursor_x = clamp(c - 1, 0, s.width - 1)
+		s.cursor.x = clamp(c - 1, 0, s.width - 1)
 	case .CUP, .HVP:
 		r := get_p(params, 0, 1)
 		c := get_p(params, 1, 1)
-		s.cursor_y = clamp(r - 1, 0, s.height - 2)
-		s.cursor_x = clamp(c - 1, 0, s.width - 1)
+		s.cursor.y = clamp(r - 1, 0, s.height - 2)
+		s.cursor.x = clamp(c - 1, 0, s.width - 1)
 	case .ED:
 		handle_erase_in_display(s, get_p(params, 0, 0))
 	case .EL:
@@ -285,7 +297,7 @@ handle_csi_dispatch :: proc(s: ^Screen, final: u8, fd: posix.FD) {
 	case .IL:
 		handle_insert_lines(s, get_p(params, 0, 1))
 	case .DL:
-		if s.parser_private != '<' {
+		if parser.private != '<' {
 			handle_delete_lines(s, get_p(params, 0, 1))
 		}
 	case .DCH:
@@ -297,18 +309,18 @@ handle_csi_dispatch :: proc(s: ^Screen, final: u8, fd: posix.FD) {
 	case .ECH:
 		handle_erase_char(s, get_p(params, 0, 1))
 	case .SGR:
-		handle_sgr_sequence(s, params)
+		handle_sgr_sequence(&s.pty_cursor.attr, params)
 	case .SM:
-		if s.parser_private == '?' {
+		if parser.private == '?' {
 			mode := get_p(params, 0, 0)
 			if mode == ALT_SCREEN && !s.in_alt_screen {
 				s.in_alt_screen = true
-				s.main_cursor_x = s.cursor_x
-				s.main_cursor_y = s.cursor_y
+				s.saved_cursor.x = s.cursor.x
+				s.saved_cursor.y = s.cursor.y
 				s.scroll_top = 0
 				s.scroll_bottom = s.height - 1
-				s.cursor_x, s.cursor_y = 0, 0
-				s.pty_cursor_x, s.pty_cursor_y = 0, 0
+				s.cursor.x, s.cursor.y = 0, 0
+				s.pty_cursor.x, s.pty_cursor.y = 0, 0
 				blank := blank_glyph(s)
 				for i in 0 ..< len(s.alt_grid) {s.alt_grid[i] = blank}
 				for i in 0 ..< len(s.dirty) {s.dirty[i] = true}
@@ -324,12 +336,12 @@ handle_csi_dispatch :: proc(s: ^Screen, final: u8, fd: posix.FD) {
 			}
 		}
 	case .RM:
-		if s.parser_private == '?' {
+		if parser.private == '?' {
 			mode := get_p(params, 0, 0)
 			if mode == ALT_SCREEN && s.in_alt_screen {
 				s.in_alt_screen = false
-				s.cursor_x = s.main_cursor_x
-				s.cursor_y = s.main_cursor_y
+				s.cursor.x = s.saved_cursor.x
+				s.cursor.y = s.saved_cursor.y
 				for i in 0 ..< s.height {s.dirty[i] = true}
 				resize_screen(s, fd)
 			} else if mode == 25 {
@@ -339,33 +351,33 @@ handle_csi_dispatch :: proc(s: ^Screen, final: u8, fd: posix.FD) {
 			}
 		}
 	case .DECSUSR:
-		if s.parser_intermediate == ' ' {
+		if parser.intermediate == ' ' {
 			style := get_p(params, 0, 0)
-			s.cursor_style = style
+			s.cursor.style = cast(CursorStyle)style
 		}
 	case .DECSTBM:
 		top := get_p(params, 0, 1)
 		bot := get_p(params, 1, s.height)
 		s.scroll_top = clamp(top - 1, 0, s.height - 1)
 		s.scroll_bottom = clamp(bot - 1, 0, s.height - 1)
-		s.cursor_x, s.cursor_y = 0, 0
+		s.cursor.x, s.cursor.y = 0, 0
 	}
 
-	s.pty_cursor_x = s.cursor_x
-	s.pty_cursor_y = s.cursor_y
+	s.pty_cursor.x = s.cursor.x
+	s.pty_cursor.y = s.cursor.y
 }
 
 handle_insert_char :: proc(s: ^Screen, n: int) {
 	if n <= 0 do return
 	grid := s.in_alt_screen ? s.alt_grid : s.grid
-	row_start := s.cursor_y * s.width
+	row_start := s.cursor.y * s.width
 
-	limit := min(n, s.width - s.cursor_x)
+	limit := min(n, s.width - s.cursor.x)
 	if limit <= 0 do return
 
-	src := row_start + s.cursor_x
-	dst := row_start + s.cursor_x + limit
-	count := s.width - (s.cursor_x + limit)
+	src := row_start + s.cursor.x
+	dst := row_start + s.cursor.x + limit
+	count := s.width - (s.cursor.x + limit)
 
 	if count > 0 {
 		copy(grid[dst:dst + count], grid[src:src + count])
@@ -375,20 +387,20 @@ handle_insert_char :: proc(s: ^Screen, n: int) {
 	for i in 0 ..< limit {
 		grid[src + i] = blank
 	}
-	s.dirty[s.cursor_y] = true
+	s.dirty[s.cursor.y] = true
 }
 
 handle_delete_char :: proc(s: ^Screen, n: int) {
 	if n <= 0 do return
 	grid := s.in_alt_screen ? s.alt_grid : s.grid
-	row_start := s.cursor_y * s.width
+	row_start := s.cursor.y * s.width
 
-	limit := min(n, s.width - s.cursor_x)
+	limit := min(n, s.width - s.cursor.x)
 	if limit <= 0 do return
 
-	src := row_start + s.cursor_x + limit
-	dst := row_start + s.cursor_x
-	count := s.width - (s.cursor_x + limit)
+	src := row_start + s.cursor.x + limit
+	dst := row_start + s.cursor.x
+	count := s.width - (s.cursor.x + limit)
 
 	if count > 0 {
 		copy(grid[dst:dst + count], grid[src:src + count])
@@ -399,28 +411,28 @@ handle_delete_char :: proc(s: ^Screen, n: int) {
 	for i in 0 ..< limit {
 		grid[clear_start + i] = blank
 	}
-	s.dirty[s.cursor_y] = true
+	s.dirty[s.cursor.y] = true
 }
 
 handle_erase_char :: proc(s: ^Screen, n: int) {
 	if n <= 0 do return
 	grid := s.in_alt_screen ? s.alt_grid : s.grid
-	row_start := s.cursor_y * s.width
-	limit := min(n, s.width - s.cursor_x)
+	row_start := s.cursor.y * s.width
+	limit := min(n, s.width - s.cursor.x)
 
 	blank := blank_glyph(s)
 	for i in 0 ..< limit {
-		grid[row_start + s.cursor_x + i] = blank
+		grid[row_start + s.cursor.x + i] = blank
 	}
-	s.dirty[s.cursor_y] = true
+	s.dirty[s.cursor.y] = true
 }
 
 handle_insert_lines :: proc(s: ^Screen, n: int) {
-	if s.cursor_y < s.scroll_top || s.cursor_y > s.scroll_bottom do return
+	if s.cursor.y < s.scroll_top || s.cursor.y > s.scroll_bottom do return
 	grid := s.in_alt_screen ? s.alt_grid : s.grid
-	num := min(n, s.scroll_bottom - s.cursor_y + 1)
+	num := min(n, s.scroll_bottom - s.cursor.y + 1)
 
-	for y := s.scroll_bottom; y >= s.cursor_y + num; y -= 1 {
+	for y := s.scroll_bottom; y >= s.cursor.y + num; y -= 1 {
 		dst := y * s.width
 		src := (y - num) * s.width
 		copy(grid[dst:dst + s.width], grid[src:src + s.width])
@@ -428,7 +440,7 @@ handle_insert_lines :: proc(s: ^Screen, n: int) {
 	}
 
 	blank := blank_glyph(s)
-	for y := s.cursor_y; y < s.cursor_y + num; y += 1 {
+	for y := s.cursor.y; y < s.cursor.y + num; y += 1 {
 		start := y * s.width
 		for x in 0 ..< s.width {grid[start + x] = blank}
 		s.dirty[y] = true
@@ -436,11 +448,11 @@ handle_insert_lines :: proc(s: ^Screen, n: int) {
 }
 
 handle_delete_lines :: proc(s: ^Screen, n: int) {
-	if s.cursor_y < s.scroll_top || s.cursor_y > s.scroll_bottom do return
+	if s.cursor.y < s.scroll_top || s.cursor.y > s.scroll_bottom do return
 	grid := s.in_alt_screen ? s.alt_grid : s.grid
-	num := min(n, s.scroll_bottom - s.cursor_y + 1)
+	num := min(n, s.scroll_bottom - s.cursor.y + 1)
 
-	for y := s.cursor_y; y <= s.scroll_bottom - num; y += 1 {
+	for y := s.cursor.y; y <= s.scroll_bottom - num; y += 1 {
 		dst := y * s.width
 		src := (y + num) * s.width
 		copy(grid[dst:dst + s.width], grid[src:src + s.width])
@@ -456,21 +468,21 @@ handle_delete_lines :: proc(s: ^Screen, n: int) {
 }
 
 handle_scroll_up :: proc(s: ^Screen, n: int) {
-	old_y := s.cursor_y
-	s.cursor_y = s.scroll_top
+	old_y := s.cursor.y
+	s.cursor.y = s.scroll_top
 	handle_delete_lines(s, n)
-	s.cursor_y = old_y
+	s.cursor.y = old_y
 }
 
 handle_scroll_down :: proc(s: ^Screen, n: int) {
-	old_y := s.cursor_y
-	s.cursor_y = s.scroll_top
+	old_y := s.cursor.y
+	s.cursor.y = s.scroll_top
 	handle_insert_lines(s, n)
-	s.cursor_y = old_y
+	s.cursor.y = old_y
 }
 
 handle_erase_in_line :: proc(s: ^Screen, mode: int) {
-	row_start := s.cursor_y * s.width
+	row_start := s.cursor.y * s.width
 	grid := s.in_alt_screen ? s.alt_grid : s.grid
 	blank := blank_glyph(s)
 
@@ -479,13 +491,13 @@ handle_erase_in_line :: proc(s: ^Screen, mode: int) {
 	WHOLELINE :: 2
 	switch mode {
 	case CURSORTOEND:
-		for x in s.cursor_x ..< s.width {grid[row_start + x] = blank}
+		for x in s.cursor.x ..< s.width {grid[row_start + x] = blank}
 	case STARTTOCURSOR:
-		for x in 0 ..< s.cursor_x + 1 {grid[row_start + x] = blank}
+		for x in 0 ..< s.cursor.x + 1 {grid[row_start + x] = blank}
 	case WHOLELINE:
 		for x in 0 ..< s.width {grid[row_start + x] = blank}
 	}
-	s.dirty[s.cursor_y] = true
+	s.dirty[s.cursor.y] = true
 }
 handle_erase_in_display :: proc(s: ^Screen, mode: int) {
 	grid := s.in_alt_screen ? s.alt_grid : s.grid
@@ -495,7 +507,7 @@ handle_erase_in_display :: proc(s: ^Screen, mode: int) {
 	switch mode {
 	case CURSORTOENDOFSCREEN:
 		handle_erase_in_line(s, 0)
-		for y in s.cursor_y + 1 ..< s.height - 1 {
+		for y in s.cursor.y + 1 ..< s.height - 1 {
 			for x in 0 ..< s.width {grid[y * s.width + x] = blank}
 			s.dirty[y] = true
 		}
